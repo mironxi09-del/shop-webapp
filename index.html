@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Магазин одежды</title>
+    <title>Магазин</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: system-ui, sans-serif; }
@@ -17,12 +17,6 @@
         .product-card p { font-size: 14px; opacity: 0.8; }
         .product-card .price { font-weight: bold; color: var(--tg-theme-button-color, #2481cc); }
         .order-btn { background: var(--tg-theme-button-color, #2481cc); color: #fff; border: none; padding: 8px; border-radius: 8px; margin-top: 8px; cursor: pointer; width: 100%; }
-        .order-form { display: none; margin-top: 20px; background: var(--tg-theme-secondary-bg-color, #f0f0f0); padding: 16px; border-radius: 12px; }
-        .order-form input { width: 100%; padding: 10px; margin: 8px 0; border-radius: 8px; border: 1px solid #ccc; }
-        .order-form button { background: var(--tg-theme-button-color, #2481cc); color: #fff; border: none; padding: 10px; border-radius: 8px; width: 100%; margin-top: 8px; cursor: pointer; }
-        .status-message { margin-top: 16px; padding: 12px; background: #d4edda; color: #155724; border-radius: 8px; display: none; }
-        .error-message { margin-top: 16px; padding: 12px; background: #f8d7da; color: #721c24; border-radius: 8px; display: none; }
-        .close-btn { background: #6c757d; margin-top: 8px; }
     </style>
 </head>
 <body>
@@ -30,23 +24,11 @@
         <h2>🛍 Категории</h2>
         <div class="category-list" id="categories"></div>
         <div id="products-container"></div>
-        <div class="order-form" id="orderForm">
-            <h3>Оформление заказа</h3>
-            <p id="orderSummary"></p>
-            <input type="text" id="addressInput" placeholder="Город, улица, дом, квартира" />
-            <button id="submitOrder">Отправить заказ</button>
-            <button onclick="closeOrderForm()" class="close-btn">Отмена</button>
-        </div>
-        <div id="statusMessage" class="status-message">✅ Заказ отправлен!</div>
-        <div id="errorMessage" class="error-message">❌ Ошибка. Заполните адрес.</div>
-        <!-- Кнопка для ручного закрытия WebApp -->
-        <button onclick="tg.close()" style="margin-top: 20px; background: #dc3545; color: #fff; border: none; padding: 10px; border-radius: 8px; width: 100%;">Закрыть магазин</button>
     </div>
 
     <script>
         const tg = window.Telegram.WebApp;
         tg.ready();
-        console.log("WebApp инициализирован!");
 
         const catalog = {
             "Кофты": [
@@ -70,8 +52,6 @@
                 { name: "Кроссовки", price: "5 500 ₽", desc: "Серые, беговая подошва", img: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=300" }
             ]
         };
-
-        let selectedItem = null;
 
         // Рендер категорий
         const categoriesDiv = document.getElementById('categories');
@@ -97,55 +77,22 @@
                     <h3>${item.name}</h3>
                     <p>${item.desc}</p>
                     <p class="price">${item.price}</p>
-                    <button class="order-btn" onclick="startOrder('${item.name}', '${item.price}')">🛍 Заказать</button>
+                    <button class="order-btn" onclick="orderItem('${item.name}', '${item.price}')">🛍 Заказать</button>
                 `;
                 grid.appendChild(card);
             });
             container.appendChild(grid);
-            document.getElementById('statusMessage').style.display = 'none';
-            document.getElementById('errorMessage').style.display = 'none';
         }
 
-        function startOrder(name, price) {
-            selectedItem = { name, price };
-            const form = document.getElementById('orderForm');
-            document.getElementById('orderSummary').textContent = `Товар: ${name} (${price})`;
-            form.style.display = 'block';
-            document.getElementById('products-container').style.display = 'none';
-            document.getElementById('addressInput').focus();
-            document.getElementById('statusMessage').style.display = 'none';
-            document.getElementById('errorMessage').style.display = 'none';
+        function orderItem(name, price) {
+            // Закрываем WebApp и открываем чат с ботом с готовым сообщением
+            const message = `Заказ: ${name} (${price})`;
+            // Ссылка на бота: нужно заменить USERNAME на реальный юзернейм бота
+            const botUsername = "МойБотBot"; // ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ЮЗЕРНЕЙМ БОТА (без @)
+            const url = `https://t.me/${botUsername}?text=${encodeURIComponent(message)}`;
+            tg.openTelegramLink(url);
+            tg.close();
         }
-
-        function closeOrderForm() {
-            document.getElementById('orderForm').style.display = 'none';
-            document.getElementById('products-container').style.display = 'grid';
-            selectedItem = null;
-        }
-
-        // Отправка заказа
-        document.getElementById('submitOrder').addEventListener('click', function() {
-            const address = document.getElementById('addressInput').value.trim();
-            if (!address) {
-                document.getElementById('errorMessage').style.display = 'block';
-                return;
-            }
-            if (!selectedItem) {
-                alert('Ошибка: товар не выбран.');
-                return;
-            }
-            const data = {
-                item: selectedItem.name,
-                price: selectedItem.price,
-                address: address
-            };
-            console.log('Отправляем данные:', data);
-            tg.sendData(JSON.stringify(data));
-            document.getElementById('statusMessage').style.display = 'block';
-            document.getElementById('orderForm').style.display = 'none';
-            // Не закрываем WebApp автоматически, чтобы увидеть результат.
-            // Пользователь закроет вручную кнопкой "Закрыть магазин".
-        });
     </script>
 </body>
 </html>
