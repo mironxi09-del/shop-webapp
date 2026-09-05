@@ -52,11 +52,10 @@
         const tg = window.Telegram.WebApp;
         tg.ready();
 
-        // Данные пользователя Telegram (имя, юзернейм)
         const user = tg.initDataUnsafe?.user || {};
         const defaultName = user.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : '';
 
-        // Расширенный каталог (5 категорий по 4 товара)
+        // Каталог (5 категорий, по 4 товара)
         const catalog = {
             "Кофты": [
                 { name: "Свитер оверсайз", price: "2 500 ₽", desc: "Тёплый, мягкий, серый", img: "https://images.unsplash.com/photo-1576566588028-4147f3842f27?w=300" },
@@ -92,7 +91,6 @@
 
         let selectedItem = null;
 
-        // Рендерим категории
         const categoriesDiv = document.getElementById('categories');
         Object.keys(catalog).forEach(cat => {
             const btn = document.createElement('button');
@@ -133,7 +131,6 @@
             document.getElementById('products-container').style.display = 'none';
             document.getElementById('statusMessage').style.display = 'none';
             document.getElementById('errorMessage').style.display = 'none';
-            // Подставляем имя пользователя, если поле пусто
             if (!document.getElementById('nameInput').value && defaultName) {
                 document.getElementById('nameInput').value = defaultName;
             }
@@ -146,7 +143,6 @@
             selectedItem = null;
         }
 
-        // Обработка отправки заказа
         document.getElementById('submitOrder').addEventListener('click', function() {
             const name = document.getElementById('nameInput').value.trim();
             const address = document.getElementById('addressInput').value.trim();
@@ -166,11 +162,10 @@
                 address: address,
                 email: email
             };
-            console.log('Отправляем данные в бота:', data);
+            console.log('🛒 Отправляем данные в бота:', data);
             tg.sendData(JSON.stringify(data));
             document.getElementById('statusMessage').style.display = 'block';
             document.getElementById('orderForm').style.display = 'none';
-            // WebApp остаётся открытым, чтобы пользователь увидел статус
         });
     </script>
 </body>
