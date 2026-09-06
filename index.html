@@ -35,6 +35,10 @@
         .status-message, .error-message { margin-top: 16px; padding: 14px; border-radius: 12px; text-align: center; font-weight: 500; display: none; }
         .status-message { background: #d4edda; color: #155724; }
         .error-message { background: #f8d7da; color: #721c24; }
+        .btn-group { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+        .btn-group button { padding: 10px; border: none; border-radius: 30px; font-weight: 600; cursor: pointer; }
+        .btn-primary { background: var(--tg-theme-button-color, #2a7de1); color: #fff; }
+        .btn-secondary { background: #6c757d; color: #fff; }
         .close-app { display: block; width: 100%; padding: 12px; margin-top: 20px; background: #dc3545; color: #fff; border: none; border-radius: 30px; font-weight: 600; cursor: pointer; }
         .close-app:active { opacity: 0.8; }
         @media (max-width: 400px) { .products { grid-template-columns: 1fr 1fr; } }
@@ -59,7 +63,14 @@
                 <button class="submit" id="submitOrder">✅ Заказать</button>
             </div>
         </div>
-        <div id="statusMessage" class="status-message">✅ Заказ сформирован!<br>Перейдите в чат с ботом и отправьте сообщение.</div>
+        <div id="statusMessage" class="status-message">
+            <p><strong>✅ Заказ сформирован!</strong></p>
+            <p style="font-size:14px; margin: 8px 0;">Вы можете отправить его боту одним из способов:</p>
+            <div class="btn-group">
+                <button id="sendToChatBtn" class="btn-primary">📤 Отправить в чат</button>
+                <button id="copyTextBtn" class="btn-secondary">📋 Копировать текст</button>
+            </div>
+        </div>
         <div id="errorMessage" class="error-message">❌ Заполните все поля.</div>
         <button class="close-app" onclick="tg.close()">✖ Закрыть магазин</button>
     </div>
@@ -188,13 +199,36 @@
         Email: ${email}`;
 
             lastOrderMessage = message;
-            const url = `https://t.me/${botUsername}?text=${encodeURIComponent(message)}`;
-            console.log('🔗 Открываем ссылку:', url);
-            tg.openTelegramLink(url);
 
-            document.getElementById('statusMessage').style.display = 'block';
+            // Показываем статусное сообщение с кнопками
+            const statusDiv = document.getElementById('statusMessage');
+            statusDiv.style.display = 'block';
             document.getElementById('orderForm').style.display = 'none';
-            // Не закрываем WebApp автоматически
+
+            // Кнопка "Отправить в чат"
+            document.getElementById('sendToChatBtn').onclick = function() {
+                const url = `https://t.me/${botUsername}?text=${encodeURIComponent(message)}`;
+                console.log('🔗 Открываем ссылку:', url);
+                tg.openTelegramLink(url);
+                // Через секунду закрываем WebApp, чтобы пользователь не остался на пустой странице
+                setTimeout(() => tg.close(), 1500);
+            };
+
+            // Кнопка "Копировать текст"
+            document.getElementById('copyTextBtn').onclick = function() {
+                navigator.clipboard.writeText(message).then(() => {
+                    alert('✅ Текст скопирован! Вставьте его в чат с ботом.');
+                }).catch(() => {
+                    // fallback для старых браузеров
+                    const textarea = document.createElement('textarea');
+                    textarea.value = message;
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    alert('✅ Текст скопирован!');
+                });
+            };
         });
 
         // Инициализация
