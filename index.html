@@ -6,227 +6,39 @@
     <title>Магазин одежды</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
-        body {
-            background: var(--tg-theme-bg-color, #f5f5f5);
-            color: var(--tg-theme-text-color, #1a1a1a);
-            padding: 16px;
-        }
-        .header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 20px;
-            padding-bottom: 12px;
-            border-bottom: 2px solid var(--tg-theme-button-color, #2a7de1);
-        }
-        .header h1 {
-            font-size: 24px;
-            font-weight: 700;
-            background: linear-gradient(135deg, var(--tg-theme-button-color, #2a7de1), #6c5ce7);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .categories {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-bottom: 20px;
-        }
-        .category-btn {
-            background: var(--tg-theme-secondary-bg-color, #e9ecef);
-            border: none;
-            padding: 10px 18px;
-            border-radius: 30px;
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--tg-theme-text-color, #1a1a1a);
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .category-btn:active {
-            transform: scale(0.95);
-            background: var(--tg-theme-button-color, #2a7de1);
-            color: #fff;
-        }
-        .products {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-            gap: 14px;
-            margin-bottom: 20px;
-        }
-        .product-card {
-            background: var(--tg-theme-secondary-bg-color, #ffffff);
-            border-radius: 16px;
-            padding: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-            text-align: center;
-        }
-        .product-card img {
-            width: 100%;
-            height: 130px;
-            object-fit: cover;
-            border-radius: 12px;
-            background: #f0f0f0;
-        }
-        .product-card h3 {
-            font-size: 15px;
-            margin: 8px 0 4px;
-        }
-        .product-card .desc {
-            font-size: 12px;
-            opacity: 0.7;
-        }
-        .product-card .price {
-            font-size: 16px;
-            font-weight: 700;
-            color: var(--tg-theme-button-color, #2a7de1);
-            margin: 6px 0;
-        }
-        .order-btn {
-            background: var(--tg-theme-button-color, #2a7de1);
-            color: var(--tg-theme-button-text-color, #fff);
-            border: none;
-            padding: 10px 0;
-            border-radius: 30px;
-            font-weight: 600;
-            width: 100%;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        .order-btn:active {
-            opacity: 0.8;
-        }
-        .order-form {
-            display: none;
-            background: var(--tg-theme-secondary-bg-color, #fff);
-            border-radius: 20px;
-            padding: 20px;
-            margin-top: 16px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-            animation: slideUp 0.3s ease;
-        }
-        @keyframes slideUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: system-ui, sans-serif; }
+        body { background: var(--tg-theme-bg-color, #f5f5f5); color: var(--tg-theme-text-color, #1a1a1a); padding: 16px; }
+        .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; border-bottom: 2px solid var(--tg-theme-button-color, #2a7de1); padding-bottom: 12px; }
+        .header h1 { font-size: 24px; font-weight: 700; background: linear-gradient(135deg, var(--tg-theme-button-color, #2a7de1), #6c5ce7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .categories { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+        .category-btn { background: var(--tg-theme-secondary-bg-color, #e9ecef); border: none; padding: 10px 18px; border-radius: 30px; font-size: 14px; font-weight: 600; cursor: pointer; }
+        .category-btn:active { transform: scale(0.95); background: var(--tg-theme-button-color, #2a7de1); color: #fff; }
+        .products { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; margin-bottom: 20px; }
+        .product-card { background: var(--tg-theme-secondary-bg-color, #fff); border-radius: 16px; padding: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); text-align: center; }
+        .product-card img { width: 100%; height: 130px; object-fit: cover; border-radius: 12px; }
+        .product-card h3 { font-size: 15px; margin: 8px 0 4px; }
+        .product-card .desc { font-size: 12px; opacity: 0.7; }
+        .product-card .price { font-size: 16px; font-weight: 700; color: var(--tg-theme-button-color, #2a7de1); margin: 6px 0; }
+        .order-btn { background: var(--tg-theme-button-color, #2a7de1); color: #fff; border: none; padding: 10px 0; border-radius: 30px; font-weight: 600; width: 100%; cursor: pointer; }
+        .order-btn:active { opacity: 0.8; }
+        .order-form { display: none; background: var(--tg-theme-secondary-bg-color, #fff); border-radius: 20px; padding: 20px; margin-top: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
         .order-form h3 { margin-bottom: 16px; }
-        .order-form p {
-            background: var(--tg-theme-bg-color, #f0f0f0);
-            padding: 10px;
-            border-radius: 12px;
-            margin-bottom: 14px;
-            font-weight: 500;
-        }
-        .order-form label {
-            display: block;
-            font-size: 13px;
-            font-weight: 600;
-            margin-top: 12px;
-            margin-bottom: 4px;
-            opacity: 0.8;
-        }
-        .order-form input, .order-form textarea {
-            width: 100%;
-            padding: 12px;
-            border-radius: 12px;
-            border: 1px solid var(--tg-theme-hint-color, #ccc);
-            background: var(--tg-theme-bg-color, #fff);
-            color: var(--tg-theme-text-color, #000);
-            font-size: 15px;
-            resize: vertical;
-        }
-        .order-form input:focus, .order-form textarea:focus {
-            outline: none;
-            border-color: var(--tg-theme-button-color, #2a7de1);
-            box-shadow: 0 0 0 3px rgba(42,125,225,0.2);
-        }
-        .form-actions {
-            display: flex;
-            gap: 10px;
-            margin-top: 16px;
-        }
-        .form-actions button {
-            flex: 1;
-            padding: 12px;
-            border: none;
-            border-radius: 30px;
-            font-weight: 600;
-            font-size: 15px;
-            cursor: pointer;
-        }
-        .form-actions .submit {
-            background: var(--tg-theme-button-color, #2a7de1);
-            color: var(--tg-theme-button-text-color, #fff);
-        }
-        .form-actions .cancel {
-            background: var(--tg-theme-secondary-bg-color, #e9ecef);
-            color: var(--tg-theme-text-color, #1a1a1a);
-        }
-        .form-actions button:active { opacity: 0.7; }
-        .result-box {
-            display: none;
-            margin-top: 20px;
-            padding: 16px;
-            background: var(--tg-theme-secondary-bg-color, #fff);
-            border-radius: 16px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-        }
-        .result-box .order-text {
-            background: var(--tg-theme-bg-color, #f0f0f0);
-            padding: 14px;
-            border-radius: 12px;
-            font-family: monospace;
-            font-size: 14px;
-            white-space: pre-wrap;
-            word-break: break-word;
-            margin: 12px 0;
-            border: 1px solid var(--tg-theme-hint-color, #ccc);
-        }
-        .result-box .instruction {
-            font-size: 15px;
-            margin-bottom: 12px;
-            font-weight: 500;
-        }
-        .copy-btn {
-            background: var(--tg-theme-button-color, #2a7de1);
-            color: var(--tg-theme-button-text-color, #fff);
-            border: none;
-            padding: 12px;
-            border-radius: 30px;
-            font-weight: 600;
-            width: 100%;
-            cursor: pointer;
-            font-size: 16px;
-        }
+        .order-form p { background: var(--tg-theme-bg-color, #f0f0f0); padding: 10px; border-radius: 12px; margin-bottom: 14px; font-weight: 500; }
+        .order-form label { display: block; font-size: 13px; font-weight: 600; margin-top: 12px; margin-bottom: 4px; opacity: 0.8; }
+        .order-form input, .order-form textarea { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--tg-theme-hint-color, #ccc); background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #000); font-size: 15px; resize: vertical; }
+        .order-form input:focus, .order-form textarea:focus { outline: none; border-color: var(--tg-theme-button-color, #2a7de1); box-shadow: 0 0 0 3px rgba(42,125,225,0.2); }
+        .form-actions { display: flex; gap: 10px; margin-top: 16px; }
+        .form-actions button { flex: 1; padding: 12px; border: none; border-radius: 30px; font-weight: 600; font-size: 15px; cursor: pointer; }
+        .form-actions .submit { background: var(--tg-theme-button-color, #2a7de1); color: #fff; }
+        .form-actions .cancel { background: var(--tg-theme-secondary-bg-color, #e9ecef); color: var(--tg-theme-text-color, #1a1a1a); }
+        .result-box { display: none; margin-top: 20px; padding: 16px; background: var(--tg-theme-secondary-bg-color, #fff); border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
+        .result-box .order-text { background: var(--tg-theme-bg-color, #f0f0f0); padding: 14px; border-radius: 12px; font-family: monospace; font-size: 14px; white-space: pre-wrap; word-break: break-word; margin: 12px 0; border: 1px solid var(--tg-theme-hint-color, #ccc); }
+        .result-box .instruction { font-size: 15px; margin-bottom: 12px; font-weight: 500; }
+        .copy-btn { background: var(--tg-theme-button-color, #2a7de1); color: #fff; border: none; padding: 12px; border-radius: 30px; font-weight: 600; width: 100%; cursor: pointer; font-size: 16px; }
         .copy-btn:active { opacity: 0.8; }
-        .close-app {
-            display: block;
-            width: 100%;
-            padding: 12px;
-            margin-top: 20px;
-            background: #dc3545;
-            color: #fff;
-            border: none;
-            border-radius: 30px;
-            font-weight: 600;
-            font-size: 15px;
-            cursor: pointer;
-        }
-        .close-app:active { opacity: 0.8; }
-        .error-message {
-            margin-top: 16px;
-            padding: 14px;
-            border-radius: 12px;
-            text-align: center;
-            font-weight: 500;
-            background: #f8d7da;
-            color: #721c24;
-            display: none;
-        }
-        @media (max-width: 400px) {
-            .products { grid-template-columns: 1fr 1fr; }
-        }
+        .close-app { display: block; width: 100%; padding: 12px; margin-top: 20px; background: #dc3545; color: #fff; border: none; border-radius: 30px; font-weight: 600; cursor: pointer; }
+        .error-message { margin-top: 16px; padding: 14px; border-radius: 12px; text-align: center; font-weight: 500; background: #f8d7da; color: #721c24; display: none; }
+        @media (max-width: 400px) { .products { grid-template-columns: 1fr 1fr; } }
     </style>
 </head>
 <body>
@@ -234,8 +46,6 @@
         <div class="header"><h1>🛍 Каталог</h1><span>👕</span></div>
         <div class="categories" id="categories"></div>
         <div id="products-container"></div>
-
-        <!-- Форма заказа -->
         <div class="order-form" id="orderForm">
             <h3>Оформление заказа</h3>
             <p id="orderSummary">Товар: ...</p>
@@ -250,14 +60,11 @@
                 <button class="submit" id="submitOrder">✅ Заказать</button>
             </div>
         </div>
-
-        <!-- Блок с результатом (показывается после заказа) -->
         <div class="result-box" id="resultBox">
             <div class="instruction">📋 Скопируйте текст ниже и отправьте его в чат с ботом для подтверждения заказа:</div>
-            <div class="order-text" id="orderTextPreview">Текст заказа</div>
+            <div class="order-text" id="orderTextPreview"></div>
             <button class="copy-btn" id="copyOrderBtn">📋 Скопировать заказ</button>
         </div>
-
         <div id="errorMessage" class="error-message">❌ Заполните все поля.</div>
         <button class="close-app" onclick="tg.close()">✖ Закрыть магазин</button>
     </div>
@@ -268,42 +75,37 @@
         const user = tg.initDataUnsafe?.user || {};
         const defaultName = user.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : '';
 
-        // ⚠️ ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ЮЗЕРНЕЙМ ВАШЕГО БОТА (без @)
-        const botUsername = 'Finalprojectlbot';
-
-        console.log('🤖 Используется юзернейм бота:', botUsername);
-
-        // Расширенный каталог (5 категорий по 4 товара)
+        // Каталог (5 категорий по 4 товара)
         const catalog = {
             "Кофты": [
                 { name: "Свитер оверсайз", price: "2 500 ₽", desc: "Тёплый, мягкий", img: "https://images.unsplash.com/photo-1576566588028-4147f3842f27?w=300" },
                 { name: "Худи с капюшоном", price: "3 200 ₽", desc: "Принт NY", img: "https://images.unsplash.com/photo-1556821840-3a63f95609a7?w=300" },
-                { name: "Кардиган", price: "4 100 ₽", desc: "Бежевый, пуговицы", img: "https://images.unsplash.com/photo-1544701557-f7d4b8a2f9f2?w=300" },
+                { name: "Кардиган", price: "4 100 ₽", desc: "Бежевый", img: "https://images.unsplash.com/photo-1544701557-f7d4b8a2f9f2?w=300" },
                 { name: "Водолазка", price: "2 800 ₽", desc: "Тёмно-синяя", img: "https://images.unsplash.com/photo-1541099649105-f69ad21f3246?w=300" }
             ],
             "Футболки": [
                 { name: "Белая классика", price: "1 200 ₽", desc: "Хлопок 100%", img: "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=300" },
                 { name: "Поло", price: "1 800 ₽", desc: "Тёмно-синий", img: "https://images.unsplash.com/photo-1581655353564-df123a1eb820?w=300" },
-                { name: "С принтом", price: "1 500 ₽", desc: "Чёрная, Vintage", img: "https://images.unsplash.com/photo-1554568218-0f1715e72254?w=300" },
-                { name: "Лонгслив", price: "1 900 ₽", desc: "Белый, длинный рукав", img: "https://images.unsplash.com/photo-1558618666-fcd25c85f5c5?w=300" }
+                { name: "С принтом", price: "1 500 ₽", desc: "Vintage", img: "https://images.unsplash.com/photo-1554568218-0f1715e72254?w=300" },
+                { name: "Лонгслив", price: "1 900 ₽", desc: "Белый", img: "https://images.unsplash.com/photo-1558618666-fcd25c85f5c5?w=300" }
             ],
             "Штаны": [
-                { name: "Джинсы", price: "3 500 ₽", desc: "Синие, прямые", img: "https://images.unsplash.com/photo-1541099649105-f69ad21f3246?w=300" },
-                { name: "Карго", price: "4 200 ₽", desc: "Хаки, карманы", img: "https://images.unsplash.com/photo-1517433670267-08bbd4be890f?w=300" },
-                { name: "Спортивные", price: "2 800 ₽", desc: "Чёрные, утеплённые", img: "https://images.unsplash.com/photo-1558618666-fcd25c85f5c5?w=300" },
+                { name: "Джинсы", price: "3 500 ₽", desc: "Синие", img: "https://images.unsplash.com/photo-1541099649105-f69ad21f3246?w=300" },
+                { name: "Карго", price: "4 200 ₽", desc: "Хаки", img: "https://images.unsplash.com/photo-1517433670267-08bbd4be890f?w=300" },
+                { name: "Спортивные", price: "2 800 ₽", desc: "Чёрные", img: "https://images.unsplash.com/photo-1558618666-fcd25c85f5c5?w=300" },
                 { name: "Чинос", price: "3 900 ₽", desc: "Бежевые", img: "https://images.unsplash.com/photo-1541099649105-f69ad21f3246?w=300" }
             ],
             "Обувь": [
-                { name: "Кеды", price: "3 900 ₽", desc: "Белые, кожа", img: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=300" },
-                { name: "Ботинки", price: "6 200 ₽", desc: "Чёрные, зимние", img: "https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=300" },
-                { name: "Кроссовки", price: "5 500 ₽", desc: "Серые, беговые", img: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=300" },
-                { name: "Сандалии", price: "2 300 ₽", desc: "Кожаные, летние", img: "https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=300" }
+                { name: "Кеды", price: "3 900 ₽", desc: "Белые", img: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=300" },
+                { name: "Ботинки", price: "6 200 ₽", desc: "Чёрные", img: "https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=300" },
+                { name: "Кроссовки", price: "5 500 ₽", desc: "Серые", img: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=300" },
+                { name: "Сандалии", price: "2 300 ₽", desc: "Кожаные", img: "https://images.unsplash.com/photo-1549923746-c502d488b3ea?w=300" }
             ],
             "Аксессуары": [
-                { name: "Сумка", price: "2 500 ₽", desc: "Чёрная, через плечо", img: "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=300" },
+                { name: "Сумка", price: "2 500 ₽", desc: "Чёрная", img: "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=300" },
                 { name: "Ремень", price: "1 200 ₽", desc: "Классический", img: "https://images.unsplash.com/photo-1517433670267-08bbd4be890f?w=300" },
-                { name: "Шарф", price: "900 ₽", desc: "Серый, шерсть", img: "https://images.unsplash.com/photo-1576566588028-4147f3842f27?w=300" },
-                { name: "Перчатки", price: "700 ₽", desc: "Чёрные, кожа", img: "https://images.unsplash.com/photo-1541099649105-f69ad21f3246?w=300" }
+                { name: "Шарф", price: "900 ₽", desc: "Серый", img: "https://images.unsplash.com/photo-1576566588028-4147f3842f27?w=300" },
+                { name: "Перчатки", price: "700 ₽", desc: "Чёрные", img: "https://images.unsplash.com/photo-1541099649105-f69ad21f3246?w=300" }
             ]
         };
 
@@ -341,7 +143,6 @@
                 grid.appendChild(card);
             });
             container.appendChild(grid);
-            // Скрываем блок результата, если он был показан
             document.getElementById('resultBox').style.display = 'none';
             document.getElementById('errorMessage').style.display = 'none';
         }
@@ -381,6 +182,7 @@
                 return;
             }
 
+            // Формируем сообщение чётко и без лишних пробелов
             const message = `🛍 ЗАКАЗ
         Товар: ${selectedItem.name}
         Цена: ${selectedItem.price}
@@ -389,19 +191,15 @@
         Email: ${email}`;
 
             lastOrderMessage = message;
-
-            // Скрываем форму и показываем блок с текстом заказа
             document.getElementById('orderForm').style.display = 'none';
             const resultBox = document.getElementById('resultBox');
             resultBox.style.display = 'block';
             document.getElementById('orderTextPreview').textContent = message;
 
-            // Устанавливаем действие для кнопки копирования
             document.getElementById('copyOrderBtn').onclick = function() {
                 navigator.clipboard.writeText(message).then(() => {
-                    alert('✅ Текст скопирован! Теперь отправьте его в чат с ботом.');
+                    alert('✅ Текст скопирован! Отправьте его в чат с ботом.');
                 }).catch(() => {
-                    // fallback для старых браузеров или мобильных
                     const textarea = document.createElement('textarea');
                     textarea.value = message;
                     document.body.appendChild(textarea);
