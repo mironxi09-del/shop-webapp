@@ -15,7 +15,7 @@
         .category-btn:active { transform: scale(0.95); background: var(--tg-theme-button-color, #2a7de1); color: #fff; }
         .products { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; margin-bottom: 20px; }
         .product-card { background: var(--tg-theme-secondary-bg-color, #ffffff); border-radius: 16px; padding: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); text-align: center; }
-        .product-card img { width: 100%; height: 130px; object-fit: cover; border-radius: 12px; }
+        .product-card img { width: 100%; height: 130px; object-fit: cover; border-radius: 12px; background: #f0f0f0; }
         .product-card h3 { font-size: 15px; margin: 8px 0 4px; }
         .product-card .desc { font-size: 12px; opacity: 0.7; }
         .product-card .price { font-size: 16px; font-weight: 700; color: var(--tg-theme-button-color, #2a7de1); margin: 6px 0; }
@@ -32,12 +32,9 @@
         .form-actions button { flex: 1; padding: 12px; border: none; border-radius: 30px; font-weight: 600; font-size: 15px; cursor: pointer; }
         .form-actions .submit { background: var(--tg-theme-button-color, #2a7de1); color: #fff; }
         .form-actions .cancel { background: var(--tg-theme-secondary-bg-color, #e9ecef); color: var(--tg-theme-text-color, #1a1a1a); }
-        .form-actions button:active { opacity: 0.7; }
         .status-message, .error-message { margin-top: 16px; padding: 14px; border-radius: 12px; text-align: center; font-weight: 500; display: none; }
         .status-message { background: #d4edda; color: #155724; }
         .error-message { background: #f8d7da; color: #721c24; }
-        .copy-btn { background: #6c757d; color: #fff; border: none; padding: 10px; border-radius: 30px; width: 100%; margin-top: 10px; font-weight: 600; cursor: pointer; display: none; }
-        .copy-btn:active { opacity: 0.7; }
         .close-app { display: block; width: 100%; padding: 12px; margin-top: 20px; background: #dc3545; color: #fff; border: none; border-radius: 30px; font-weight: 600; cursor: pointer; }
         .close-app:active { opacity: 0.8; }
         @media (max-width: 400px) { .products { grid-template-columns: 1fr 1fr; } }
@@ -62,9 +59,8 @@
                 <button class="submit" id="submitOrder">✅ Заказать</button>
             </div>
         </div>
-        <div id="statusMessage" class="status-message">✅ Заказ сформирован!<br>Нажмите «Открыть чат» или скопируйте текст.</div>
+        <div id="statusMessage" class="status-message">✅ Заказ сформирован!<br>Перейдите в чат с ботом и отправьте сообщение.</div>
         <div id="errorMessage" class="error-message">❌ Заполните все поля.</div>
-        <button class="copy-btn" id="copyMessage">📋 Скопировать текст заказа</button>
         <button class="close-app" onclick="tg.close()">✖ Закрыть магазин</button>
     </div>
 
@@ -74,11 +70,9 @@
         const user = tg.initDataUnsafe?.user || {};
         const defaultName = user.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : '';
 
-        // ⚠️⚠️⚠️ ВСТАВЬТЕ СЮДА ТОЧНЫЙ ЮЗЕРНЕЙМ ВАШЕГО БОТА (БЕЗ @) ⚠️⚠️⚠️
-        // Например: 'MySuperShopBot' или 'MyShopBot'
-        const botUsername = 'Finalprojectlbot';
+        // ⚠️ ЗАМЕНИТЕ НА РЕАЛЬНЫЙ ЮЗЕРНЕЙМ ВАШЕГО БОТА (без @)
+        const botUsername = 'ВАШ_ЮЗЕРНЕЙМ_БОТА';
 
-        // Проверка в консоли (для отладки)
         console.log('🤖 Используется юзернейм бота:', botUsername);
 
         // Расширенный каталог (5 категорий по 4 товара)
@@ -200,23 +194,7 @@
 
             document.getElementById('statusMessage').style.display = 'block';
             document.getElementById('orderForm').style.display = 'none';
-            document.getElementById('copyMessage').style.display = 'block';
-        });
-
-        document.getElementById('copyMessage').addEventListener('click', function() {
-            if (lastOrderMessage) {
-                navigator.clipboard.writeText(lastOrderMessage).then(() => {
-                    alert('✅ Текст заказа скопирован! Вставьте его в чат с ботом.');
-                }).catch(() => {
-                    const textarea = document.createElement('textarea');
-                    textarea.value = lastOrderMessage;
-                    document.body.appendChild(textarea);
-                    textarea.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(textarea);
-                    alert('✅ Текст заказа скопирован!');
-                });
-            }
+            // Не закрываем WebApp автоматически
         });
 
         // Инициализация
