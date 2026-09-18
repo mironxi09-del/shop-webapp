@@ -514,39 +514,37 @@
         <div class="order-form" id="orderForm">
             <h3>Оформление заказа</h3>
             <p id="orderSummary"></p>
-            <label>Ваше имя</label>
-            <input type="text" id="nameInput" placeholder="Иван Иванов" />
-            <label>Адрес доставки</label>
-            <textarea id="addressInput" rows="3" placeholder="Город, улица, дом, квартира"></textarea>
-            <label>Email</label>
-            <input type="email" id="emailInput" placeholder="example@mail.com" />
+            <label for="nameInput">Ваше имя</label>
+            <input type="text" id="nameInput" maxlength="100" placeholder="Иван Иванов" />
+            <label for="addressInput">Адрес доставки</label>
+            <textarea id="addressInput" maxlength="500" rows="3" placeholder="Город, улица, дом, квартира"></textarea>
+            <label for="emailInput">Email</label>
+            <input type="email" id="emailInput" maxlength="120" placeholder="example@mail.com" />
             <div class="form-actions">
                 <button class="cancel" id="cancelOrderForm">Отмена</button>
                 <button class="submit" id="submitOrder">✅ Оформить</button>
             </div>
         </div>
 
-        <!-- Блок результата (после оформления) -->
-        <div class="result-box" id="resultBox">
-            <div style="font-weight:500;margin-bottom:8px;">📋 Скопируйте текст и отправьте его в чат с ботом для подтверждения:</div>
-            <div class="order-text" id="orderTextPreview"></div>
-            <button class="copy-btn" id="copyOrderBtn">📋 Копировать</button>
-        </div>
-
-        <div id="errorMessage" class="error-message">❌ Заполните все поля.</div>
-        <button class="close-app" onclick="tg.close()">✖ Закрыть</button>
+        <div id="errorMessage" class="error-message" role="status" aria-live="polite">❌ Заполните все поля.</div>
+        <button class="close-app" onclick="tg?.close()">✖ Закрыть</button>
     </div>
 
     <script>
-        const tg = window.Telegram.WebApp;
-        tg.ready();
-        const user = tg.initDataUnsafe?.user || {};
+        const tg = window.Telegram?.WebApp;
+        tg?.ready();
+        const storage = {
+            getItem(key) { try { return localStorage.getItem(key); } catch { return null; } },
+            setItem(key, value) { try { localStorage.setItem(key, value); } catch {} },
+            removeItem(key) { try { localStorage.removeItem(key); } catch {} }
+        };
+        const user = tg?.initDataUnsafe?.user || {};
         const defaultName = user.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : '';
 
         // ===== НАСТРОЙКИ =====
         let settings = {
-            theme: localStorage.getItem('theme') || 'light',
-            fontSize: localStorage.getItem('fontSize') || 'medium',
+            theme: storage.getItem('theme') || 'light',
+            fontSize: storage.getItem('fontSize') || 'medium',
         };
 
         // ===== ТЕМЫ =====
@@ -556,7 +554,7 @@
             document.querySelectorAll('#themeOptions button').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.theme === theme);
             });
-            localStorage.setItem('theme', theme);
+            storage.setItem('theme', theme);
             // Обновляем кнопку быстрой смены темы
             document.getElementById('themeToggle').textContent = theme === 'dark' ? '☀️' : (theme === 'gray' ? '🌫️' : '🌙');
         }
@@ -564,7 +562,7 @@
 
         // Быстрая смена темы (кнопка в шапке) — циклическое переключение
         document.getElementById('themeToggle').addEventListener('click', function() {
-            const current = localStorage.getItem('theme') || 'light';
+            const current = storage.getItem('theme') || 'light';
             let next;
             if (current === 'light') next = 'dark';
             else if (current === 'dark') next = 'gray';
@@ -581,7 +579,7 @@
         function setFontSize(size) {
             document.body.classList.remove('font-small', 'font-medium', 'font-large');
             document.body.classList.add('font-' + size);
-            localStorage.setItem('fontSize', size);
+            storage.setItem('fontSize', size);
             document.querySelectorAll('#fontSizeOptions button').forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.size === size);
             });
@@ -659,16 +657,31 @@
         };
 
         // ===== КОРЗИНА =====
-        let cart = JSON.parse(localStorage.getItem('cart')) || [];
+        const productMap = new Map([...Object.values(catalog).flat(), ...Object.values(exclusiveCatalog).flat()].map(p => [p.name, p]));
+        let cart = [];
+        try {
+            const saved = JSON.parse(storage.getItem('cart') || '[]');
+            const totals = new Map();
+            if (Array.isArray(saved)) for (const row of saved) {
+                const p = productMap.get(row?.name);
+                if (!p || !['S','M','L','XL'].includes(row.size) || !Number.isInteger(row.qty) || row.qty < 1) continue;
+                const qty = Math.min(row.qty, (p.stock ?? 99) - (totals.get(p.name) || 0));
+                if (qty < 1) continue;
+                totals.set(p.name, (totals.get(p.name) || 0) + qty);
+                const old = cart.find(x => x.name === p.name && x.size === row.size);
+                if (old) old.qty += qty;
+                else cart.push({name: p.name, price: p.price, size: row.size, qty, exclusive: p.stock !== undefined});
+            }
+        } catch {}
         let exclusiveStock = {};
         Object.keys(exclusiveCatalog).forEach(cat => {
             exclusiveCatalog[cat].forEach(item => {
-                exclusiveStock[item.name] = item.stock;
+                exclusiveStock[item.name] = Math.max(0, item.stock - cart.filter(x => x.name === item.name).reduce((n,x) => n + x.qty, 0));
             });
         });
 
         function saveCart() {
-            localStorage.setItem('cart', JSON.stringify(cart));
+            storage.setItem('cart', JSON.stringify(cart));
             updateCartUI();
             renderExclusiveProducts();
         }
@@ -681,16 +694,11 @@
         }
 
         function addToCart(name, price, size = 'M', isExclusive = false) {
+            if (cart.filter(x => x.name === name).reduce((n,x) => n + x.qty, 0) >= 99) { alert('Максимум 99 единиц товара'); return; }
             if (isExclusive) {
                 const stock = exclusiveStock[name];
                 if (stock === undefined || stock <= 0) {
                     alert('⛔ Товара нет в наличии!');
-                    return;
-                }
-                const existing = cart.find(item => item.name === name && item.size === size);
-                const currentQty = existing ? existing.qty : 0;
-                if (currentQty >= stock) {
-                    alert('⛔ Нельзя добавить больше, чем есть в наличии!');
                     return;
                 }
                 exclusiveStock[name] -= 1;
@@ -756,10 +764,11 @@
         }
 
         // ===== ОТРИСОВКА КАТАЛОГОВ =====
+        const activeCategories = {};
         function renderCatalog(containerId, categoriesContainerId, productsContainerId, catalogData, isExclusive = false) {
             const categoriesDiv = document.getElementById(categoriesContainerId);
             const productsDiv = document.getElementById(productsContainerId);
-            let activeCategory = Object.keys(catalogData)[0];
+            let activeCategory = activeCategories[containerId] || Object.keys(catalogData)[0];
 
             function renderCategories() {
                 categoriesDiv.innerHTML = '';
@@ -769,6 +778,7 @@
                     btn.textContent = cat;
                     btn.onclick = () => {
                         activeCategory = cat;
+                        activeCategories[containerId] = cat;
                         renderCategories();
                         renderProducts(cat);
                     };
@@ -825,9 +835,7 @@
                     }
                 });
                 productsDiv.appendChild(grid);
-                // Скрываем формы, если они были открыты
-                document.getElementById('orderForm').style.display = 'none';
-                document.getElementById('resultBox').style.display = 'none';
+
             }
             renderCategories();
             renderProducts(activeCategory);
@@ -846,7 +854,7 @@
             document.getElementById('settingsContainer').style.display = tab === 'settings' ? 'block' : 'none';
             if (tab !== 'settings') {
                 document.getElementById('orderForm').style.display = 'none';
-                document.getElementById('resultBox').style.display = 'none';
+
             }
             if (tab === 'exclusive') renderExclusiveProducts();
         }
@@ -875,52 +883,32 @@
             document.getElementById('orderForm').style.display = 'none';
         });
 
+        let sending = false;
         document.getElementById('submitOrder').addEventListener('click', function() {
+            const error = document.getElementById('errorMessage');
+            const fail = text => { error.textContent = text; error.style.display = 'block'; };
+            if (sending) return;
             const name = document.getElementById('nameInput').value.trim();
             const address = document.getElementById('addressInput').value.trim();
             const email = document.getElementById('emailInput').value.trim();
-            if (!name || !address || !email) {
-                document.getElementById('errorMessage').style.display = 'block';
-                return;
+            if (!cart.length) return fail('Корзина пуста. Добавьте товары.');
+            if (!name || name.length > 100 || address.length < 5 || address.length > 500 || email.length > 120 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+                return fail('Укажите имя, полный адрес (5–500 символов) и корректный email.');
+            if (!tg || tg.platform === 'unknown' || tg.initDataUnsafe?.query_id || tg.initDataUnsafe?.start_param)
+                return fail('Откройте магазин кнопкой клавиатуры под полем ввода в личном чате бота после /start.');
+            const data = JSON.stringify({version: 1, order_id: crypto.randomUUID(), name, address, email,
+                items: cart.map(({name, size, qty}) => ({name, size, qty}))});
+            if (new TextEncoder().encode(data).length > 4096) return fail('Заказ слишком большой. Разделите его на несколько заказов.');
+            sending = true;
+            this.disabled = true;
+            try {
+                tg.sendData(data);
+                fail('Данные переданы Telegram. Дождитесь подтверждения бота в чате. Корзина сохранена.');
+            } catch {
+                sending = false;
+                this.disabled = false;
+                fail('Не удалось передать заказ. Попробуйте снова через кнопку клавиатуры бота.');
             }
-            document.getElementById('errorMessage').style.display = 'none';
-
-            const itemsStr = cart.map(it => `${it.name} (x${it.qty}, размер ${it.size})`).join(', ');
-            const total = cart.reduce((sum, it) => {
-                const priceNum = parseInt(it.price.replace(/[^\d]/g, ''));
-                return sum + priceNum * it.qty;
-            }, 0).toLocaleString('ru-RU') + ' ₽';
-
-            const message = `🛍 ЗАКАЗ
-        Товары: ${itemsStr}
-        Итого: ${total}
-        Имя: ${name}
-        Адрес: ${address}
-        Email: ${email}`;
-
-            // Скрываем форму, показываем результат
-            document.getElementById('orderForm').style.display = 'none';
-            const resultBox = document.getElementById('resultBox');
-            resultBox.style.display = 'block';
-            document.getElementById('orderTextPreview').textContent = message;
-
-            // Очистка корзины (после оформления)
-            clearCart();
-
-            // Обработчик копирования
-            document.getElementById('copyOrderBtn').onclick = function() {
-                navigator.clipboard.writeText(message).then(() => {
-                    alert('✅ Текст скопирован! Отправьте его в чат с ботом.');
-                }).catch(() => {
-                    const textarea = document.createElement('textarea');
-                    textarea.value = message;
-                    document.body.appendChild(textarea);
-                    textarea.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(textarea);
-                    alert('✅ Текст скопирован!');
-                });
-            };
         });
 
         // ===== КОРЗИНА ПОПАП =====
@@ -941,7 +929,7 @@
             alert('Корзина очищена!');
         });
         document.getElementById('resetAllBtn').addEventListener('click', () => {
-            localStorage.clear();
+            ['cart', 'theme', 'fontSize'].forEach(key => storage.removeItem(key));
             location.reload();
         });
 
