@@ -162,7 +162,10 @@ const CATALOG = {
   }
 };
 const WEBAPP_URL = 'https://mironxi09-del.github.io/shop-webapp/index.html';
-const keyboard = {keyboard: [[{text:'🛍 Открыть магазин',web_app:{url:WEBAPP_URL}}],[{text:'📍 Мой адрес'}]],resize_keyboard:true};
+const keyboard = {keyboard: [[{text:'🛍 Открыть магазин',web_app:{url:WEBAPP_URL}}],[{text:'❓ Помощь'},{text:'📍 Мой адрес'}]],resize_keyboard:true};
+const statuses={sent:'🆕 Новый',processing:'🟡 В работе',shipped:'🚚 В доставке',done:'✅ Завершён',cancelled:'❌ Отменён'};
+const statusButtons=id=>({inline_keyboard:[[{text:'🟡 В работе',callback_data:`status:${id}:processing`},{text:'🚚 Доставка',callback_data:`status:${id}:shipped`}],[{text:'✅ Завершён',callback_data:`status:${id}:done`},{text:'❌ Отменить',callback_data:`status:${id}:cancelled`}]]});
+const isAdmin=(env,id)=>String(id)===String(env.ADMIN_CHAT_ID);
 
 export function validateOrder(raw) {
   if (typeof raw !== 'string' || new TextEncoder().encode(raw).length > 4096) throw Error('payload');
@@ -197,14 +200,37 @@ async function telegram(env, method, body) {
 }
 const send=(env,chat_id,text,extra={})=>telegram(env,'sendMessage',{chat_id,text,...extra});
 
+async function showOrders(env,chat) {
+  const rows=(await env.DB.prepare('SELECT order_id,state,address,created_at FROM orders ORDER BY created_at DESC LIMIT 20').all()).results||[];
+  const text=rows.length?'<b>Последние 20 заказов</b>\n\n'+rows.map((x,i)=>`${i+1}. <b>#${x.order_id.slice(0,8)}</b> — ${statuses[x.state]||x.state}\n📍 ${x.address}`).join('\n\n'):'Заказов пока нет.';
+  await send(env,chat,text,{parse_mode:'HTML'});
+}
+async function processCallback(q,env) {
+  if (!isAdmin(env,q.from?.id)) return telegram(env,'answerCallbackQuery',{callback_query_id:q.id,text:'Доступ только для администратора',show_alert:true});
+  const [,id,state]=(q.data||'').split(':');
+  if (!statuses[state] || !/^[0-9a-f-]{36}$/i.test(id)) return;
+  const row=await env.DB.prepare('SELECT user_id FROM orders WHERE order_id=?').bind(id).first();
+  if (!row) return telegram(env,'answerCallbackQuery',{callback_query_id:q.id,text:'Заказ не найден'});
+  await env.DB.prepare('UPDATE orders SET state=? WHERE order_id=?').bind(state,id).run();
+  await telegram(env,'answerCallbackQuery',{callback_query_id:q.id,text:`Статус: ${statuses[state]}`});
+  await send(env,q.message.chat.id,`Заказ #${id.slice(0,8)}: ${statuses[state]}`);
+  await send(env,row.user_id,`📦 Статус заказа № ${id.slice(0,8)} изменён: <b>${statuses[state]}</b>`,{parse_mode:'HTML',reply_markup:keyboard});
+}
 async function processUpdate(update,env) {
+  if (update?.callback_query) return processCallback(update.callback_query,env);
   const m=update?.message;
   if (!m || m.chat?.type!=='private' || !Number.isSafeInteger(m.from?.id)) return;
   const user=m.from;
   if (/^\/start(?:@\w+)?(?:\s|$)/.test(m.text||'')) {
-    await send(env,m.chat.id,'Откройте магазин кнопкой под полем ввода. Подтверждение заказа придёт в этот чат.',{reply_markup:keyboard});
+    await send(env,m.chat.id,'Добро пожаловать! Откройте магазин кнопкой ниже. Я пришлю подтверждение и изменения статуса заказа.',{reply_markup:keyboard});
     return;
   }
+  if (m.text==='❓ Помощь' || /^\/help(?:@\w+)?$/.test(m.text||'')) {
+    await send(env,m.chat.id,'🛍 Выберите товары в магазине, укажите адрес и подтвердите заказ.\n📦 После оформления я буду сообщать о его статусе.\n\nКоманды администратора: /orders — последние заказы, /stats — статистика.',{reply_markup:keyboard});
+    return;
+  }
+  if (/^\/orders(?:@\w+)?$/.test(m.text||'')) { if (isAdmin(env,user.id)) await showOrders(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
+  if (/^\/stats(?:@\w+)?$/.test(m.text||'')) { if (!isAdmin(env,user.id)) return; const rows=(await env.DB.prepare('SELECT state,COUNT(*) AS n FROM orders GROUP BY state').all()).results||[]; await send(env,m.chat.id,'<b>Статистика заказов</b>\n'+Object.entries(statuses).map(([k,v])=>`${v}: ${rows.find(x=>x.state===k)?.n||0}`).join('\n'),{parse_mode:'HTML'}); return; }
   if (m.text==='📍 Мой адрес' || /^\/address(?:@\w+)?$/.test(m.text||'')) {
     const row=await env.DB.prepare('SELECT address FROM orders WHERE user_id=? AND state=? ORDER BY created_at DESC LIMIT 1').bind(user.id,'sent').first();
     await send(env,m.chat.id,row?'Ваш адрес:\n'+row.address:'Вы ещё не оформляли заказ.');
@@ -223,7 +249,7 @@ async function processUpdate(update,env) {
     const now=Date.now();
     const claim=await env.DB.prepare("UPDATE orders SET state='sending',locked_at=? WHERE user_id=? AND order_id=? AND (state='pending' OR (state='sending' AND locked_at<?))").bind(now,user.id,d.order_id,now-90000).run();
     if (!claim.meta.changes) throw Error('order_busy');
-    try {await send(env,env.ADMIN_CHAT_ID,adminText);}
+    try {await send(env,env.ADMIN_CHAT_ID,adminText,{reply_markup:statusButtons(d.order_id)});}
     catch (e) {
       await env.DB.prepare("UPDATE orders SET state='pending' WHERE user_id=? AND order_id=?").bind(user.id,d.order_id).run();
       throw e;
