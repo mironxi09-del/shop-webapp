@@ -1,0 +1,9 @@
+name = "shop-telegram-bot"
+main = "worker.js"
+compatibility_date = "2026-09-18"
+keep_vars = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "shop-orders"
+database_id = "f815e8ed-6a95-4d55-a7dd-d41ee781bf7e"
