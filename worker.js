@@ -206,15 +206,29 @@ async function showOrders(env,chat) {
   await send(env,chat,text,{parse_mode:'HTML'});
 }
 async function processCallback(q,env) {
-  if (!isAdmin(env,q.from?.id)) return telegram(env,'answerCallbackQuery',{callback_query_id:q.id,text:'Доступ только для администратора',show_alert:true});
+  const callbackId=q?.id;
+  const adminChat=String(env.ADMIN_CHAT_ID||'');
+  const sender=String(q?.from?.id||'');
+  const messageChat=String(q?.message?.chat?.id||'');
+  if (!callbackId) return;
+  if (sender!==adminChat && messageChat!==adminChat) {
+    return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Доступ только для администратора',show_alert:true});
+  }
   const [,id,state]=(q.data||'').split(':');
-  if (!statuses[state] || !/^[0-9a-f-]{36}$/i.test(id)) return;
-  const row=await env.DB.prepare('SELECT user_id FROM orders WHERE order_id=?').bind(id).first();
-  if (!row) return telegram(env,'answerCallbackQuery',{callback_query_id:q.id,text:'Заказ не найден'});
-  await env.DB.prepare('UPDATE orders SET state=? WHERE order_id=?').bind(state,id).run();
-  await telegram(env,'answerCallbackQuery',{callback_query_id:q.id,text:`Статус: ${statuses[state]}`});
-  await send(env,q.message.chat.id,`Заказ #${id.slice(0,8)}: ${statuses[state]}`);
-  await send(env,row.user_id,`📦 Статус заказа № ${id.slice(0,8)} изменён: <b>${statuses[state]}</b>`,{parse_mode:'HTML',reply_markup:keyboard});
+  if (!statuses[state] || !/^[0-9a-f-]{36}$/i.test(id)) {
+    return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Некорректная кнопка',show_alert:true});
+  }
+  try {
+    const row=await env.DB.prepare('SELECT user_id FROM orders WHERE order_id=?').bind(id).first();
+    if (!row) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Заказ не найден',show_alert:true});
+    await env.DB.prepare('UPDATE orders SET state=? WHERE order_id=?').bind(state,id).run();
+    await telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:`Статус: ${statuses[state]}`});
+    await send(env,q.message.chat.id,`Заказ #${id.slice(0,8)}: ${statuses[state]}`);
+    await send(env,row.user_id,`📦 Статус заказа № ${id.slice(0,8)} изменён: <b>${statuses[state]}</b>`,{parse_mode:'HTML',reply_markup:keyboard});
+  } catch (error) {
+    console.error('Order status update failed');
+    await telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Не удалось изменить статус. Попробуйте ещё раз.',show_alert:true}).catch(()=>{});
+  }
 }
 async function processUpdate(update,env) {
   if (update?.callback_query) return processCallback(update.callback_query,env);
