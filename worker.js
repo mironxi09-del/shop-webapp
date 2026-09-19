@@ -279,6 +279,12 @@ async function processUpdate(update,env) {
 export default {
   async fetch(request,env) {
     const path=new URL(request.url).pathname;
+    if (request.method==='GET' && path==='/repair-webhook') {
+      try {
+        await telegram(env,'setWebhook',{url:new URL('/telegram',request.url).toString(),secret_token:env.WEBHOOK_SECRET,allowed_updates:['message','callback_query'],drop_pending_updates:false});
+        return new Response('Webhook repaired: message and callback_query enabled.');
+      } catch { return new Response('Webhook repair failed.',{status:503}); }
+    }
     if (request.method==='GET' && path==='/') return new Response('Telegram shop webhook.');
     if (request.method!=='POST' || path!=='/telegram') return new Response('Not found',{status:404});
     if (!env.WEBHOOK_SECRET || request.headers.get('X-Telegram-Bot-Api-Secret-Token')!==env.WEBHOOK_SECRET) return new Response('Forbidden',{status:403});
