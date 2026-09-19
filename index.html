@@ -925,7 +925,11 @@
             this.disabled = true;
             try {
                 tg.sendData(data);
-                fail('Данные переданы Telegram. Дождитесь подтверждения бота в чате. Корзина сохранена.');
+                clearCart();
+                document.getElementById('orderForm').style.display = 'none';
+                document.getElementById('addressInput').value = '';
+                document.getElementById('emailInput').value = '';
+                fail('✅ Заказ передан Telegram. Корзина очищена. Дождитесь подтверждения бота в чате.');
             } catch {
                 sending = false;
                 this.disabled = false;
