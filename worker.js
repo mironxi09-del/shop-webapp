@@ -234,6 +234,17 @@ async function processUpdate(update,env) {
   if (update?.callback_query) return processCallback(update.callback_query,env);
   const m=update?.message;
   if (!m || m.chat?.type!=='private' || !Number.isSafeInteger(m.from?.id)) return;
+  // An administrator can send /start to repair a webhook created by an older version.
+  if (/^\/start(?:@\w+)?(?:\s|$)/.test(m.text||'')) try {
+    await telegram(env,'setWebhook',{
+      url:'https://shop-telegram-bot.mironxi09.workers.dev/telegram',
+      secret_token:env.WEBHOOK_SECRET,
+      allowed_updates:['message','callback_query'],
+      drop_pending_updates:false
+    });
+  } catch (error) {
+    console.error('Webhook refresh failed');
+  }
   const user=m.from;
   if (/^\/start(?:@\w+)?(?:\s|$)/.test(m.text||'')) {
     await send(env,m.chat.id,'Добро пожаловать! Откройте магазин кнопкой ниже. Я пришлю подтверждение и изменения статуса заказа.',{reply_markup:keyboard});
