@@ -510,6 +510,13 @@
             <button class="tab" data-tab="settings">⚙️ Настройки</button>
         </div>
 
+        <div id="catalogTools" style="display:grid;gap:8px;margin-bottom:14px">
+            <input id="productSearch" type="search" placeholder="Поиск по всем категориям…" aria-label="Поиск товаров">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <select id="productSort" aria-label="Сортировка" style="flex:1;padding:12px;border-radius:12px;background:var(--card-bg);color:var(--text);border:1px solid var(--border)"><option value="default">По умолчанию</option><option value="asc">Сначала дешевле</option><option value="desc">Сначала дороже</option><option value="name">По названию</option></select>
+                <button id="favoritesFilter" class="secondary-btn" aria-pressed="false">♡ Избранное</button>
+            </div>
+        </div>
         <div id="catalogContainer">
             <div class="categories" id="categories"></div>
             <div id="products-container"></div>
@@ -546,7 +553,7 @@
                 </div>
             </div>
             <div class="setting-group setting-toggles">
-                <div class="setting-row"><div><b>Плавные анимации</b><small>Уменьшает движение в интерфейсе</small></div><button class="switch" id="motionToggle" aria-pressed="true"><span></span></button></div>
+                <div class="setting-row"><div><b>Уменьшить анимации</b><small>Меньше движения в интерфейсе</small></div><button class="switch" id="motionToggle" aria-label="Уменьшить анимации" aria-pressed="false"><span></span></button></div>
                 <div class="setting-row"><div><b>Виброотклик</b><small>Лёгкий отклик при действиях</small></div><button class="switch" id="hapticToggle" aria-pressed="true"><span></span></button></div>
             </div>
             <div class="setting-group settings-actions">
@@ -772,6 +779,7 @@
             storage.setItem('cart', JSON.stringify(cart));
             updateCartUI();
             renderExclusiveProducts();
+            renderCatalog('catalogContainer', 'categories', 'products-container', catalog);
         }
 
         function updateCartUI() {
@@ -832,12 +840,20 @@
                 html += `
                     <div class="cart-item">
                         <span>${item.name} (x${item.qty}, размер ${item.size}) - ${item.price}</span>
-                        <span class="remove" data-index="${idx}">✖</span>
+                        <div style="display:flex;gap:4px;flex-wrap:wrap"><button class="secondary-btn cart-minus" data-index="${idx}" aria-label="Уменьшить количество">−</button><button class="secondary-btn cart-plus" data-index="${idx}" aria-label="Увеличить количество" ${(exclusiveStock[item.name]||0)<=0?'disabled':''}>+</button><button class="secondary-btn remove" data-index="${idx}" aria-label="Удалить товар">✖</button></div>
                     </div>
                 `;
             });
             container.innerHTML = html;
             document.getElementById('cartTotal').textContent = `Итого: ${total.toLocaleString('ru-RU')} ₽`;
+            document.querySelectorAll('.cart-plus').forEach(el => el.addEventListener('click', () => {
+                const item=cart[Number(el.dataset.index)]; if(item) addToCart(item.name,item.price,item.size,item.exclusive);
+            }));
+            document.querySelectorAll('.cart-minus').forEach(el => el.addEventListener('click', () => {
+                const index=Number(el.dataset.index), item=cart[index]; if(!item) return;
+                if(item.qty===1) return removeFromCart(index);
+                item.qty--; exclusiveStock[item.name]=(exclusiveStock[item.name]||0)+1; saveCart();
+            }));
             document.querySelectorAll('.cart-item .remove').forEach(el => {
                 el.addEventListener('click', function() {
                     const idx = parseInt(this.dataset.index);
@@ -848,6 +864,21 @@
 
         // ===== ОТРИСОВКА КАТАЛОГОВ =====
         const activeCategories = {};
+        let favorites = new Set();
+        try { const saved=JSON.parse(storage.getItem('favorites')||'[]'); if(Array.isArray(saved)) favorites=new Set(saved.filter(name=>productMap.has(name))); } catch {}
+        let onlyFavorites=false;
+        function refreshCatalogs() {
+            renderCatalog('catalogContainer','categories','products-container',catalog);
+            renderExclusiveProducts();
+        }
+        document.getElementById('productSearch').addEventListener('input',refreshCatalogs);
+        document.getElementById('productSort').addEventListener('change',refreshCatalogs);
+        document.getElementById('favoritesFilter').addEventListener('click',()=>{
+            onlyFavorites=!onlyFavorites;
+            document.getElementById('favoritesFilter').setAttribute('aria-pressed',String(onlyFavorites));
+            document.getElementById('favoritesFilter').textContent=onlyFavorites?'♥ Избранное':'♡ Избранное';
+            refreshCatalogs();
+        });
         function renderCatalog(containerId, categoriesContainerId, productsContainerId, catalogData, isExclusive = false) {
             const categoriesDiv = document.getElementById(categoriesContainerId);
             const productsDiv = document.getElementById(productsContainerId);
@@ -872,12 +903,20 @@
             function renderProducts(category) {
                 productsDiv.innerHTML = '';
                 const allItems = Object.values(catalogData).flat();
-                const items = category === soldOutCategory ? allItems.filter(item => (exclusiveStock[item.name] ?? 0) <= 0) : (catalogData[category] || []).filter(item => (exclusiveStock[item.name] ?? 0) > 0);
+                const query=document.getElementById('productSearch').value.trim().toLocaleLowerCase('ru');
+                let items = query || onlyFavorites ? allItems : category === soldOutCategory ? allItems.filter(item => (exclusiveStock[item.name] ?? 0) <= 0) : (catalogData[category] || []).filter(item => (exclusiveStock[item.name] ?? 0) > 0);
+                items=items.filter(item=>(!query||item.name.toLocaleLowerCase('ru').includes(query))&&(!onlyFavorites||favorites.has(item.name)));
+                const sort=document.getElementById('productSort').value;
+                const price=item=>Number(item.price.replace(/[^\d]/g,''));
+                if(sort==='asc') items.sort((a,b)=>price(a)-price(b));
+                if(sort==='desc') items.sort((a,b)=>price(b)-price(a));
+                if(sort==='name') items.sort((a,b)=>a.name.localeCompare(b.name,'ru'));
+                if(!items.length) { const empty=document.createElement('p'); empty.textContent=onlyFavorites?'Здесь пока нет избранных товаров. Нажмите сердечко на карточке.':'Ничего не найдено. Попробуйте другую категорию или запрос.'; productsDiv.appendChild(empty); }
                 const grid = document.createElement('div');
                 grid.className = 'products';
                 items.forEach(item => {
                     const stock = isExclusive ? exclusiveStock[item.name] : undefined;
-                    const outOfStock = isExclusive && (stock === undefined || stock <= 0);
+                    const outOfStock = (exclusiveStock[item.name] ?? 0) <= 0;
                     const card = document.createElement('div');
                     card.className = 'product-card';
                     let sizeButtons = '';
@@ -891,6 +930,7 @@
                     card.innerHTML = `
                         <img src="${item.img}" alt="${item.name}" loading="lazy">
                         <h3>${item.name}</h3>
+                        <button class="secondary-btn favorite-btn" aria-label="Избранное: ${item.name}" aria-pressed="${favorites.has(item.name)}">${favorites.has(item.name)?'♥ В избранном':'♡ В избранное'}</button>
                         <div class="price">${item.price}</div>
                         ${stockHtml}
                         <div class="size-select" data-product="${item.name}">
@@ -899,6 +939,10 @@
                         <button class="add-btn" ${outOfStock ? 'disabled' : ''}>${outOfStock ? 'Нет в наличии' : '🛍 В корзину'}</button>
                     `;
                     grid.appendChild(card);
+                    card.querySelector('.favorite-btn').addEventListener('click',()=>{
+                        if(favorites.has(item.name)) favorites.delete(item.name); else favorites.add(item.name);
+                        storage.setItem('favorites',JSON.stringify([...favorites])); refreshCatalogs();
+                    });
 
                     const sizeBtns = card.querySelectorAll('.size-btn');
                     let selectedSize = defaultSize;
@@ -931,6 +975,7 @@
 
         // ===== ВКЛАДКИ =====
         function switchTab(tab) {
+            document.getElementById('catalogTools').style.display=tab==='settings'?'none':'grid';
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
             document.getElementById('catalogContainer').style.display = tab === 'catalog' ? 'block' : 'none';

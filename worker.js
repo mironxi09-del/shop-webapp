@@ -162,7 +162,7 @@ const CATALOG = {
   }
 };
 const WEBAPP_URL = 'https://mironxi09-del.github.io/shop-webapp/index.html';
-const keyboard = {keyboard: [[{text:'🛍 Открыть магазин',web_app:{url:WEBAPP_URL}}],[{text:'❓ Помощь'},{text:'📍 Мой адрес'}],[{text:'⚙️ Админ-панель'}]],resize_keyboard:true};
+const keyboard = {keyboard: [[{text:'🛍 Открыть магазин',web_app:{url:WEBAPP_URL}}],[{text:'📦 Мои заказы'},{text:'❓ Помощь'}],[{text:'📍 Мой адрес'},{text:'⚙️ Админ-панель'}]],resize_keyboard:true};
 const statuses={sent:'🆕 Новый',processing:'🟡 В работе',shipped:'🚚 В доставке',done:'✅ Завершён',cancelled:'❌ Отменён'};
 const statusButtons=id=>({inline_keyboard:[[{text:'🟡 В работе',callback_data:`status:${id}:processing`},{text:'🚚 Доставка',callback_data:`status:${id}:shipped`}],[{text:'✅ Завершён',callback_data:`status:${id}:done`},{text:'❌ Отменить',callback_data:`status:${id}:cancelled`}]]});
 const isAdmin=(env,id)=>String(id)===String(env.ADMIN_CHAT_ID);
@@ -247,19 +247,24 @@ async function processUpdate(update,env) {
     console.error('Webhook refresh failed');
   }
   const user=m.from;
+  if (m.text==='📦 Мои заказы' || /^\/myorders(?:@\w+)?$/.test(m.text||'')) {
+    const rows=(await env.DB.prepare('SELECT order_id,state,created_at FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 10').bind(user.id).all()).results||[];
+    const text=rows.length?'📦 Ваши последние заказы\n\n'+rows.map(row=>'№ '+row.order_id.slice(0,8)+' · '+new Date(row.created_at).toLocaleDateString('ru-RU')+'\n'+(statuses[row.state]||'⏳ Обрабатывается')).join('\n\n'):'У вас пока нет заказов. Откройте магазин кнопкой ниже.';
+    await send(env,m.chat.id,text,{reply_markup:keyboard}); return;
+  }
   if (/^\/start(?:@\w+)?(?:\s|$)/.test(m.text||'')) {
     await send(env,m.chat.id,'Добро пожаловать! Откройте магазин кнопкой ниже. Я пришлю подтверждение и изменения статуса заказа.',{reply_markup:keyboard});
     return;
   }
   if (m.text==='❓ Помощь' || /^\/help(?:@\w+)?$/.test(m.text||'')) {
-    await send(env,m.chat.id,'🛍 Выберите товары в магазине, укажите адрес и подтвердите заказ.\n📦 После оформления я буду сообщать о его статусе.\n\nКоманды администратора: /admin — остатки товаров, /orders — последние заказы, /stats — статистика.',{reply_markup:keyboard});
+    await send(env,m.chat.id,'🛍 Как заказать\nОткройте магазин, выберите размер и товары, затем укажите адрес в корзине.\n\n❤️ Избранное и поиск находятся в магазине.\n📦 /myorders — ваши последние заказы и статусы.\n📍 /address — адрес последнего заказа.\n\nСтатусы: Новый → В работе → В доставке → Завершён. Изменения статуса приходят сюда автоматически.'+(isAdmin(env,user.id)?'\n\n⚙️ Администратору\n/admin — остатки\n/orders — все последние заказы\n/stats — статистика':''),{reply_markup:keyboard});
     return;
   }
   if (/^\/(stock|admin)(?:@\w+)?$/.test(m.text||'') || m.text==='⚙️ Админ-панель') { if (isAdmin(env,user.id)) await showStockPanel(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
   if (/^\/orders(?:@\w+)?$/.test(m.text||'')) { if (isAdmin(env,user.id)) await showOrders(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
   if (/^\/stats(?:@\w+)?$/.test(m.text||'')) { if (!isAdmin(env,user.id)) return; const rows=(await env.DB.prepare('SELECT state,COUNT(*) AS n FROM orders GROUP BY state').all()).results||[]; await send(env,m.chat.id,'<b>Статистика заказов</b>\n'+Object.entries(statuses).map(([k,v])=>`${v}: ${rows.find(x=>x.state===k)?.n||0}`).join('\n'),{parse_mode:'HTML'}); return; }
   if (m.text==='📍 Мой адрес' || /^\/address(?:@\w+)?$/.test(m.text||'')) {
-    const row=await env.DB.prepare('SELECT address FROM orders WHERE user_id=? AND state=? ORDER BY created_at DESC LIMIT 1').bind(user.id,'sent').first();
+    const row=await env.DB.prepare("SELECT address FROM orders WHERE user_id=? AND state IN ('sent','processing','shipped','done') ORDER BY created_at DESC LIMIT 1").bind(user.id).first();
     await send(env,m.chat.id,row?'Ваш адрес:\n'+row.address:'Вы ещё не оформляли заказ.');
     return;
   }
