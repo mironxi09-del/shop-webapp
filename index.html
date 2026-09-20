@@ -700,6 +700,7 @@
                 else cart.push({name: p.name, price: p.price, size: row.size, qty, exclusive: p.stock !== undefined, stockTracked: true});
             }
         } catch {}
+        let inventoryReady = false;
         let exclusiveStock = {};
         productMap.forEach(item => { exclusiveStock[item.name] = Math.max(0, (item.stock ?? 99) - cart.filter(x => x.name === item.name).reduce((n,x) => n + x.qty, 0)); });
 
@@ -710,6 +711,7 @@
                 const response = await fetch(INVENTORY_URL, {cache: 'no-store'});
                 if (!response.ok) return;
                 const serverStock = await response.json();
+                inventoryReady = true;
                 for (const name of Object.keys(exclusiveStock)) {
                     let available = Math.max(0, Number(serverStock[name]) || 0);
                     for (const item of cart.filter(item => item.stockTracked && item.name === name)) {
@@ -946,6 +948,7 @@
             try {
                 tg.sendData(data);
                 clearCart();
+                setTimeout(loadGlobalInventory, 1200);
                 document.getElementById('orderForm').style.display = 'none';
                 document.getElementById('addressInput').value = '';
                 document.getElementById('emailInput').value = '';
@@ -984,6 +987,7 @@
         renderExclusiveProducts();
         switchTab('catalog');
         updateCartUI();
+        loadGlobalInventory();
     </script>
 </body>
 </html>
