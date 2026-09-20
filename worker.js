@@ -166,6 +166,14 @@ const keyboard = {keyboard: [[{text:'🛍 Открыть магазин',web_app
 const statuses={sent:'🆕 Новый',processing:'🟡 В работе',shipped:'🚚 В доставке',done:'✅ Завершён',cancelled:'❌ Отменён'};
 const statusButtons=id=>({inline_keyboard:[[{text:'🟡 В работе',callback_data:`status:${id}:processing`},{text:'🚚 Доставка',callback_data:`status:${id}:shipped`}],[{text:'✅ Завершён',callback_data:`status:${id}:done`},{text:'❌ Отменить',callback_data:`status:${id}:cancelled`}]]});
 const isAdmin=(env,id)=>String(id)===String(env.ADMIN_CHAT_ID);
+const LIMITED_PRODUCTS=Object.entries(CATALOG).filter(([,product])=>product.limit<99).map(([name,product])=>({name,initial:product.limit}));
+const corsHeaders={'Access-Control-Allow-Origin':'https://mironxi09-del.github.io','Access-Control-Allow-Methods':'GET, OPTIONS','Cache-Control':'no-store'};
+async function ensureInventory(env) { await env.DB.prepare('CREATE TABLE IF NOT EXISTS inventory (name TEXT PRIMARY KEY, stock INTEGER NOT NULL CHECK(stock>=0), updated_at INTEGER NOT NULL)').run(); const now=Date.now(); await env.DB.batch(LIMITED_PRODUCTS.map(item=>env.DB.prepare('INSERT OR IGNORE INTO inventory (name,stock,updated_at) VALUES (?,?,?)').bind(item.name,item.initial,now))); }
+async function inventory(env) { await ensureInventory(env); const rows=(await env.DB.prepare('SELECT name,stock FROM inventory').all()).results||[]; return Object.fromEntries(rows.map(row=>[row.name,row.stock])); }
+async function reserveLimitedStock(env,d) { const totals=new Map(); for (const item of d.items) if (CATALOG[item.name].limit<99) totals.set(item.name,(totals.get(item.name)||0)+item.qty); if (!totals.size) return []; await ensureInventory(env); const reserved=[]; try { for (const [name,qty] of totals) { const result=await env.DB.prepare('UPDATE inventory SET stock=stock-?,updated_at=? WHERE name=? AND stock>=?').bind(qty,Date.now(),name,qty).run(); if (!result.meta.changes) throw Error('out_of_stock'); reserved.push([name,qty]); } return reserved; } catch (error) { await env.DB.batch(reserved.map(([name,qty])=>env.DB.prepare('UPDATE inventory SET stock=stock+?,updated_at=? WHERE name=?').bind(qty,Date.now(),name))); throw error; } }
+async function changeLimitedStock(env,index,delta) { const item=LIMITED_PRODUCTS[index]; if (!item || !Number.isInteger(delta) || ![-1,1].includes(delta)) throw Error('stock_action'); await ensureInventory(env); const sql=delta>0?'UPDATE inventory SET stock=stock+1,updated_at=? WHERE name=?':'UPDATE inventory SET stock=stock-1,updated_at=? WHERE name=? AND stock>0'; const result=await env.DB.prepare(sql).bind(Date.now(),item.name).run(); if (!result.meta.changes && delta<0) throw Error('stock_empty'); }
+async function stockPanel(env) { const stock=await inventory(env); const text='<b>📦 Остатки лимитированных товаров</b>\n\n'+LIMITED_PRODUCTS.map((item,index)=>(index+1)+'. '+item.name+' — <b>'+(stock[item.name]??0)+' шт.</b>').join('\n')+'\n\nИспользуйте кнопки, чтобы изменить остаток на 1 шт.'; const rows=LIMITED_PRODUCTS.map((item,index)=>[{text:'− '+(index+1),callback_data:'stock:'+index+':-1'},{text:'+ '+(index+1),callback_data:'stock:'+index+':1'}]); return {text,reply_markup:{inline_keyboard:rows}}; }
+async function showStockPanel(env,chat) { const panel=await stockPanel(env); await send(env,chat,panel.text,{parse_mode:'HTML',reply_markup:panel.reply_markup}); }
 
 export function validateOrder(raw) {
   if (typeof raw !== 'string' || new TextEncoder().encode(raw).length > 4096) throw Error('payload');
@@ -206,29 +214,15 @@ async function showOrders(env,chat) {
   await send(env,chat,text,{parse_mode:'HTML'});
 }
 async function processCallback(q,env) {
-  const callbackId=q?.id;
-  const adminChat=String(env.ADMIN_CHAT_ID||'');
-  const sender=String(q?.from?.id||'');
-  const messageChat=String(q?.message?.chat?.id||'');
-  if (!callbackId) return;
-  if (sender!==adminChat && messageChat!==adminChat) {
-    return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Доступ только для администратора',show_alert:true});
-  }
-  const [,id,state]=(q.data||'').split(':');
-  if (!statuses[state] || !/^[0-9a-f-]{36}$/i.test(id)) {
-    return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Некорректная кнопка',show_alert:true});
-  }
+  const callbackId=q?.id; if (!callbackId) return;
+  if (!isAdmin(env,q?.from?.id) || !isAdmin(env,q?.message?.chat?.id)) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Доступ только для администратора',show_alert:true});
+  const [kind,id,value]=(q.data||'').split(':');
   try {
-    const row=await env.DB.prepare('SELECT user_id FROM orders WHERE order_id=?').bind(id).first();
-    if (!row) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Заказ не найден',show_alert:true});
-    await env.DB.prepare('UPDATE orders SET state=? WHERE order_id=?').bind(state,id).run();
-    await telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:`Статус: ${statuses[state]}`});
-    await send(env,q.message.chat.id,`Заказ #${id.slice(0,8)}: ${statuses[state]}`);
-    await send(env,row.user_id,`📦 Статус заказа № ${id.slice(0,8)} изменён: <b>${statuses[state]}</b>`,{parse_mode:'HTML',reply_markup:keyboard});
-  } catch (error) {
-    console.error('Order status update failed');
-    await telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Не удалось изменить статус. Попробуйте ещё раз.',show_alert:true}).catch(()=>{});
-  }
+    if (kind==='stock') { await changeLimitedStock(env,Number(id),Number(value)); const panel=await stockPanel(env); await telegram(env,'editMessageText',{chat_id:q.message.chat.id,message_id:q.message.message_id,text:panel.text,parse_mode:'HTML',reply_markup:panel.reply_markup}); return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Остаток обновлён'}); }
+    if (kind!=='status' || !statuses[value] || !/^[0-9a-f-]{36}$/i.test(id)) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Некорректная кнопка',show_alert:true});
+    const row=await env.DB.prepare('SELECT user_id FROM orders WHERE order_id=?').bind(id).first(); if (!row) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Заказ не найден',show_alert:true});
+    await env.DB.prepare('UPDATE orders SET state=? WHERE order_id=?').bind(value,id).run(); await telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Статус: '+statuses[value]}); await send(env,q.message.chat.id,'Заказ #'+id.slice(0,8)+': '+statuses[value]); await send(env,row.user_id,'📦 Статус заказа № '+id.slice(0,8)+' изменён: <b>'+statuses[value]+'</b>',{parse_mode:'HTML',reply_markup:keyboard});
+  } catch (error) { console.error('Admin callback failed'); await telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:value==='-1'?'Товар уже закончился':'Не удалось выполнить действие',show_alert:true}).catch(()=>{}); }
 }
 async function processUpdate(update,env) {
   if (update?.callback_query) return processCallback(update.callback_query,env);
@@ -254,6 +248,7 @@ async function processUpdate(update,env) {
     await send(env,m.chat.id,'🛍 Выберите товары в магазине, укажите адрес и подтвердите заказ.\n📦 После оформления я буду сообщать о его статусе.\n\nКоманды администратора: /orders — последние заказы, /stats — статистика.',{reply_markup:keyboard});
     return;
   }
+  if (/^\/(stock|admin)(?:@\w+)?$/.test(m.text||'') || m.text==='⚙️ Админ-панель') { if (isAdmin(env,user.id)) await showStockPanel(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
   if (/^\/orders(?:@\w+)?$/.test(m.text||'')) { if (isAdmin(env,user.id)) await showOrders(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
   if (/^\/stats(?:@\w+)?$/.test(m.text||'')) { if (!isAdmin(env,user.id)) return; const rows=(await env.DB.prepare('SELECT state,COUNT(*) AS n FROM orders GROUP BY state').all()).results||[]; await send(env,m.chat.id,'<b>Статистика заказов</b>\n'+Object.entries(statuses).map(([k,v])=>`${v}: ${rows.find(x=>x.state===k)?.n||0}`).join('\n'),{parse_mode:'HTML'}); return; }
   if (m.text==='📍 Мой адрес' || /^\/address(?:@\w+)?$/.test(m.text||'')) {
@@ -274,8 +269,9 @@ async function processUpdate(update,env) {
     const now=Date.now();
     const claim=await env.DB.prepare("UPDATE orders SET state='sending',locked_at=? WHERE user_id=? AND order_id=? AND (state='pending' OR (state='sending' AND locked_at<?))").bind(now,user.id,d.order_id,now-90000).run();
     if (!claim.meta.changes) throw Error('order_busy');
-    try {await send(env,env.ADMIN_CHAT_ID,adminText,{reply_markup:statusButtons(d.order_id)});}
-    catch (e) {
+    let reserved=[];
+    try { reserved=await reserveLimitedStock(env,d); await send(env,env.ADMIN_CHAT_ID,adminText,{reply_markup:statusButtons(d.order_id)}); }
+    catch (e) { if (reserved.length) await env.DB.batch(reserved.map(([name,qty])=>env.DB.prepare('UPDATE inventory SET stock=stock+?,updated_at=? WHERE name=?').bind(qty,Date.now(),name))); 
       await env.DB.prepare("UPDATE orders SET state='pending' WHERE user_id=? AND order_id=?").bind(user.id,d.order_id).run();
       throw e;
     }
@@ -296,6 +292,8 @@ export default {
         return new Response('Webhook repaired: message and callback_query enabled.');
       } catch { return new Response('Webhook repair failed.',{status:503}); }
     }
+    if (request.method==='OPTIONS' && path==='/inventory') return new Response(null,{headers:corsHeaders});
+    if (request.method==='GET' && path==='/inventory') { if (!env.DB) return new Response('Not configured',{status:503,headers:corsHeaders}); return Response.json(await inventory(env),{headers:corsHeaders}); }
     if (request.method==='GET' && path==='/') return new Response('Telegram shop webhook.');
     if (request.method!=='POST' || path!=='/telegram') return new Response('Not found',{status:404});
     if (!env.WEBHOOK_SECRET || request.headers.get('X-Telegram-Bot-Api-Secret-Token')!==env.WEBHOOK_SECRET) return new Response('Forbidden',{status:403});

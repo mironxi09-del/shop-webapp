@@ -707,6 +707,28 @@
             });
         });
 
+        const INVENTORY_URL = 'https://shop-telegram-bot.mironxi09.workers.dev/inventory';
+        async function loadGlobalInventory() {
+            if (typeof fetch !== 'function') return;
+            try {
+                const response = await fetch(INVENTORY_URL, {cache: 'no-store'});
+                if (!response.ok) return;
+                const serverStock = await response.json();
+                for (const name of Object.keys(exclusiveStock)) {
+                    let available = Math.max(0, Number(serverStock[name]) || 0);
+                    for (const item of cart.filter(item => item.exclusive && item.name === name)) {
+                        item.qty = Math.min(item.qty, available);
+                        available -= item.qty;
+                    }
+                    cart = cart.filter(item => !item.exclusive || item.qty > 0);
+                    exclusiveStock[name] = available;
+                }
+                storage.setItem('cart', JSON.stringify(cart));
+                updateCartUI();
+                renderExclusiveProducts();
+            } catch { /* Store stays usable while the network is unavailable. */ }
+        }
+
         function saveCart() {
             storage.setItem('cart', JSON.stringify(cart));
             updateCartUI();
