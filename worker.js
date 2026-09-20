@@ -293,7 +293,13 @@ async function processUpdate(update,env) {
 export default {
   async fetch(request,env) {
     const path=new URL(request.url).pathname;
-    if (request.method==='GET' && path==='/repair-webhook') {
+    if (request.method==='GET' && path==='/diagnostics') {
+      const report={worker:true,bot_token_configured:Boolean(env.BOT_TOKEN),admin_configured:/^-?\d+$/.test(env.ADMIN_CHAT_ID||''),database_connected:Boolean(env.DB)};
+      try {
+        const info=await telegram(env,'getWebhookInfo',{});
+        return Response.json({...report,webhook:{url:info.url,pending_updates:info.pending_update_count,last_error:info.last_error_message||null,last_error_at:info.last_error_date||null,allowed_updates:info.allowed_updates||[]}});
+      } catch { return Response.json({...report,telegram_api:false},{status:503}); }
+    }    if (request.method==='GET' && path==='/repair-webhook') {
       try {
         await telegram(env,'setWebhook',{url:new URL('/telegram',request.url).toString(),secret_token:env.WEBHOOK_SECRET,allowed_updates:['message','callback_query'],drop_pending_updates:false});
         return new Response('Webhook repaired: message and callback_query enabled.');
