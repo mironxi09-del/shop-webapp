@@ -162,18 +162,24 @@ const CATALOG = {
   }
 };
 const WEBAPP_URL = 'https://mironxi09-del.github.io/shop-webapp/index.html';
-const keyboard = {keyboard: [[{text:'🛍 Открыть магазин',web_app:{url:WEBAPP_URL}}],[{text:'❓ Помощь'},{text:'📍 Мой адрес'}]],resize_keyboard:true};
+const keyboard = {keyboard: [[{text:'🛍 Открыть магазин',web_app:{url:WEBAPP_URL}}],[{text:'❓ Помощь'},{text:'📍 Мой адрес'}],[{text:'⚙️ Админ-панель'}]],resize_keyboard:true};
 const statuses={sent:'🆕 Новый',processing:'🟡 В работе',shipped:'🚚 В доставке',done:'✅ Завершён',cancelled:'❌ Отменён'};
 const statusButtons=id=>({inline_keyboard:[[{text:'🟡 В работе',callback_data:`status:${id}:processing`},{text:'🚚 Доставка',callback_data:`status:${id}:shipped`}],[{text:'✅ Завершён',callback_data:`status:${id}:done`},{text:'❌ Отменить',callback_data:`status:${id}:cancelled`}]]});
 const isAdmin=(env,id)=>String(id)===String(env.ADMIN_CHAT_ID);
-const LIMITED_PRODUCTS=Object.entries(CATALOG).filter(([,product])=>product.limit<99).map(([name,product])=>({name,initial:product.limit}));
+const INVENTORY_PRODUCTS=Object.entries(CATALOG).map(([name,product])=>({name,initial:product.limit,limited:product.limit<99}));
 const corsHeaders={'Access-Control-Allow-Origin':'https://mironxi09-del.github.io','Access-Control-Allow-Methods':'GET, OPTIONS','Cache-Control':'no-store'};
-async function ensureInventory(env) { await env.DB.prepare('CREATE TABLE IF NOT EXISTS inventory (name TEXT PRIMARY KEY, stock INTEGER NOT NULL CHECK(stock>=0), updated_at INTEGER NOT NULL)').run(); const now=Date.now(); await env.DB.batch(LIMITED_PRODUCTS.map(item=>env.DB.prepare('INSERT OR IGNORE INTO inventory (name,stock,updated_at) VALUES (?,?,?)').bind(item.name,item.initial,now))); }
+async function ensureInventory(env) { await env.DB.prepare('CREATE TABLE IF NOT EXISTS inventory (name TEXT PRIMARY KEY, stock INTEGER NOT NULL CHECK(stock>=0), updated_at INTEGER NOT NULL)').run(); const now=Date.now(); await env.DB.batch(INVENTORY_PRODUCTS.map(item=>env.DB.prepare('INSERT OR IGNORE INTO inventory (name,stock,updated_at) VALUES (?,?,?)').bind(item.name,item.initial,now))); }
 async function inventory(env) { await ensureInventory(env); const rows=(await env.DB.prepare('SELECT name,stock FROM inventory').all()).results||[]; return Object.fromEntries(rows.map(row=>[row.name,row.stock])); }
-async function reserveLimitedStock(env,d) { const totals=new Map(); for (const item of d.items) if (CATALOG[item.name].limit<99) totals.set(item.name,(totals.get(item.name)||0)+item.qty); if (!totals.size) return []; await ensureInventory(env); const reserved=[]; try { for (const [name,qty] of totals) { const result=await env.DB.prepare('UPDATE inventory SET stock=stock-?,updated_at=? WHERE name=? AND stock>=?').bind(qty,Date.now(),name,qty).run(); if (!result.meta.changes) throw Error('out_of_stock'); reserved.push([name,qty]); } return reserved; } catch (error) { await env.DB.batch(reserved.map(([name,qty])=>env.DB.prepare('UPDATE inventory SET stock=stock+?,updated_at=? WHERE name=?').bind(qty,Date.now(),name))); throw error; } }
-async function changeLimitedStock(env,index,delta) { const item=LIMITED_PRODUCTS[index]; if (!item || !Number.isInteger(delta) || ![-1,1].includes(delta)) throw Error('stock_action'); await ensureInventory(env); const sql=delta>0?'UPDATE inventory SET stock=stock+1,updated_at=? WHERE name=?':'UPDATE inventory SET stock=stock-1,updated_at=? WHERE name=? AND stock>0'; const result=await env.DB.prepare(sql).bind(Date.now(),item.name).run(); if (!result.meta.changes && delta<0) throw Error('stock_empty'); }
-async function stockPanel(env) { const stock=await inventory(env); const text='<b>📦 Остатки лимитированных товаров</b>\n\n'+LIMITED_PRODUCTS.map((item,index)=>(index+1)+'. '+item.name+' — <b>'+(stock[item.name]??0)+' шт.</b>').join('\n')+'\n\nИспользуйте кнопки, чтобы изменить остаток на 1 шт.'; const rows=LIMITED_PRODUCTS.map((item,index)=>[{text:'− '+(index+1),callback_data:'stock:'+index+':-1'},{text:'+ '+(index+1),callback_data:'stock:'+index+':1'}]); return {text,reply_markup:{inline_keyboard:rows}}; }
-async function showStockPanel(env,chat) { const panel=await stockPanel(env); await send(env,chat,panel.text,{parse_mode:'HTML',reply_markup:panel.reply_markup}); }
+async function reserveStock(env,d) { const totals=new Map(); for (const item of d.items) totals.set(item.name,(totals.get(item.name)||0)+item.qty); if (!totals.size) return []; await ensureInventory(env); const reserved=[]; try { for (const [name,qty] of totals) { const result=await env.DB.prepare('UPDATE inventory SET stock=stock-?,updated_at=? WHERE name=? AND stock>=?').bind(qty,Date.now(),name,qty).run(); if (!result.meta.changes) throw Error('out_of_stock'); reserved.push([name,qty]); } return reserved; } catch (error) { await env.DB.batch(reserved.map(([name,qty])=>env.DB.prepare('UPDATE inventory SET stock=stock+?,updated_at=? WHERE name=?').bind(qty,Date.now(),name))); throw error; } }
+async function changeStock(env,index,delta) { const item=INVENTORY_PRODUCTS[index]; if (!item || !Number.isInteger(delta) || ![-1,1].includes(delta)) throw Error('stock_action'); await ensureInventory(env); const sql=delta>0?'UPDATE inventory SET stock=stock+1,updated_at=? WHERE name=?':'UPDATE inventory SET stock=stock-1,updated_at=? WHERE name=? AND stock>0'; const result=await env.DB.prepare(sql).bind(Date.now(),item.name).run(); if (!result.meta.changes && delta<0) throw Error('stock_empty'); }
+async function stockPanel(env,page=0) {
+  const stock=await inventory(env); const pageSize=8; const totalPages=Math.ceil(INVENTORY_PRODUCTS.length/pageSize); page=Math.max(0,Math.min(Number(page)||0,totalPages-1)); const offset=page*pageSize; const items=INVENTORY_PRODUCTS.slice(offset,offset+pageSize);
+  const text='<b>⚙️ Управление остатками</b>\nСтраница '+(page+1)+' из '+totalPages+'\n\n'+items.map((item,index)=>{const number=offset+index+1; return number+'. '+item.name+' — <b>'+String(stock[item.name]??0)+' шт.</b>'+(item.limited?'  • лимитированный':'');}).join('\n')+'\n\nКнопки меняют остаток на 1 штуку.';
+  const rows=items.map((item,index)=>{const number=offset+index; return [{text:'− 1',callback_data:'stock:'+number+':-1:'+page},{text:'+ 1',callback_data:'stock:'+number+':1:'+page}];});
+  rows.push([{text:'◀️',callback_data:'stockpage:'+(page-1)},{text:(page+1)+' / '+totalPages,callback_data:'stockpage:'+page},{text:'▶️',callback_data:'stockpage:'+(page+1)}]);
+  return {text,reply_markup:{inline_keyboard:rows}};
+}
+async function showStockPanel(env,chat) { const panel=await stockPanel(env,0); await send(env,chat,panel.text,{parse_mode:'HTML',reply_markup:panel.reply_markup}); }
 
 export function validateOrder(raw) {
   if (typeof raw !== 'string' || new TextEncoder().encode(raw).length > 4096) throw Error('payload');
@@ -216,9 +222,10 @@ async function showOrders(env,chat) {
 async function processCallback(q,env) {
   const callbackId=q?.id; if (!callbackId) return;
   if (!isAdmin(env,q?.from?.id) || !isAdmin(env,q?.message?.chat?.id)) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Доступ только для администратора',show_alert:true});
-  const [kind,id,value]=(q.data||'').split(':');
+  const [kind,id,value,page]=(q.data||'').split(':');
   try {
-    if (kind==='stock') { await changeLimitedStock(env,Number(id),Number(value)); const panel=await stockPanel(env); await telegram(env,'editMessageText',{chat_id:q.message.chat.id,message_id:q.message.message_id,text:panel.text,parse_mode:'HTML',reply_markup:panel.reply_markup}); return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Остаток обновлён'}); }
+    if (kind==='stockpage') { const panel=await stockPanel(env,Number(id)); await telegram(env,'editMessageText',{chat_id:q.message.chat.id,message_id:q.message.message_id,text:panel.text,parse_mode:'HTML',reply_markup:panel.reply_markup}); return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId}); }
+    if (kind==='stock') { await changeStock(env,Number(id),Number(value)); const panel=await stockPanel(env,Number(page)); await telegram(env,'editMessageText',{chat_id:q.message.chat.id,message_id:q.message.message_id,text:panel.text,parse_mode:'HTML',reply_markup:panel.reply_markup}); return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Остаток обновлён'}); }
     if (kind!=='status' || !statuses[value] || !/^[0-9a-f-]{36}$/i.test(id)) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Некорректная кнопка',show_alert:true});
     const row=await env.DB.prepare('SELECT user_id FROM orders WHERE order_id=?').bind(id).first(); if (!row) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Заказ не найден',show_alert:true});
     await env.DB.prepare('UPDATE orders SET state=? WHERE order_id=?').bind(value,id).run(); await telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Статус: '+statuses[value]}); await send(env,q.message.chat.id,'Заказ #'+id.slice(0,8)+': '+statuses[value]); await send(env,row.user_id,'📦 Статус заказа № '+id.slice(0,8)+' изменён: <b>'+statuses[value]+'</b>',{parse_mode:'HTML',reply_markup:keyboard});
@@ -245,7 +252,7 @@ async function processUpdate(update,env) {
     return;
   }
   if (m.text==='❓ Помощь' || /^\/help(?:@\w+)?$/.test(m.text||'')) {
-    await send(env,m.chat.id,'🛍 Выберите товары в магазине, укажите адрес и подтвердите заказ.\n📦 После оформления я буду сообщать о его статусе.\n\nКоманды администратора: /orders — последние заказы, /stats — статистика.',{reply_markup:keyboard});
+    await send(env,m.chat.id,'🛍 Выберите товары в магазине, укажите адрес и подтвердите заказ.\n📦 После оформления я буду сообщать о его статусе.\n\nКоманды администратора: /admin — остатки товаров, /orders — последние заказы, /stats — статистика.',{reply_markup:keyboard});
     return;
   }
   if (/^\/(stock|admin)(?:@\w+)?$/.test(m.text||'') || m.text==='⚙️ Админ-панель') { if (isAdmin(env,user.id)) await showStockPanel(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
@@ -270,7 +277,7 @@ async function processUpdate(update,env) {
     const claim=await env.DB.prepare("UPDATE orders SET state='sending',locked_at=? WHERE user_id=? AND order_id=? AND (state='pending' OR (state='sending' AND locked_at<?))").bind(now,user.id,d.order_id,now-90000).run();
     if (!claim.meta.changes) throw Error('order_busy');
     let reserved=[];
-    try { reserved=await reserveLimitedStock(env,d); await send(env,env.ADMIN_CHAT_ID,adminText,{reply_markup:statusButtons(d.order_id)}); }
+    try { reserved=await reserveStock(env,d); await send(env,env.ADMIN_CHAT_ID,adminText,{reply_markup:statusButtons(d.order_id)}); }
     catch (e) { if (reserved.length) await env.DB.batch(reserved.map(([name,qty])=>env.DB.prepare('UPDATE inventory SET stock=stock+?,updated_at=? WHERE name=?').bind(qty,Date.now(),name))); 
       await env.DB.prepare("UPDATE orders SET state='pending' WHERE user_id=? AND order_id=?").bind(user.id,d.order_id).run();
       throw e;

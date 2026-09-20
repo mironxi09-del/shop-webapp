@@ -697,15 +697,11 @@
                 totals.set(p.name, (totals.get(p.name) || 0) + qty);
                 const old = cart.find(x => x.name === p.name && x.size === row.size);
                 if (old) old.qty += qty;
-                else cart.push({name: p.name, price: p.price, size: row.size, qty, exclusive: p.stock !== undefined});
+                else cart.push({name: p.name, price: p.price, size: row.size, qty, exclusive: p.stock !== undefined, stockTracked: true});
             }
         } catch {}
         let exclusiveStock = {};
-        Object.keys(exclusiveCatalog).forEach(cat => {
-            exclusiveCatalog[cat].forEach(item => {
-                exclusiveStock[item.name] = Math.max(0, item.stock - cart.filter(x => x.name === item.name).reduce((n,x) => n + x.qty, 0));
-            });
-        });
+        productMap.forEach(item => { exclusiveStock[item.name] = Math.max(0, (item.stock ?? 99) - cart.filter(x => x.name === item.name).reduce((n,x) => n + x.qty, 0)); });
 
         const INVENTORY_URL = 'https://shop-telegram-bot.mironxi09.workers.dev/inventory';
         async function loadGlobalInventory() {
@@ -716,15 +712,16 @@
                 const serverStock = await response.json();
                 for (const name of Object.keys(exclusiveStock)) {
                     let available = Math.max(0, Number(serverStock[name]) || 0);
-                    for (const item of cart.filter(item => item.exclusive && item.name === name)) {
+                    for (const item of cart.filter(item => item.stockTracked && item.name === name)) {
                         item.qty = Math.min(item.qty, available);
                         available -= item.qty;
                     }
-                    cart = cart.filter(item => !item.exclusive || item.qty > 0);
+                    cart = cart.filter(item => !item.stockTracked || item.qty > 0);
                     exclusiveStock[name] = available;
                 }
                 storage.setItem('cart', JSON.stringify(cart));
                 updateCartUI();
+                renderCatalog('catalogContainer', 'categories', 'products-container', catalog);
                 renderExclusiveProducts();
             } catch { /* Store stays usable while the network is unavailable. */ }
         }
@@ -744,19 +741,14 @@
 
         function addToCart(name, price, size = 'M', isExclusive = false) {
             if (cart.filter(x => x.name === name).reduce((n,x) => n + x.qty, 0) >= 99) { alert('Максимум 99 единиц товара'); return; }
-            if (isExclusive) {
-                const stock = exclusiveStock[name];
-                if (stock === undefined || stock <= 0) {
-                    alert('⛔ Товара нет в наличии!');
-                    return;
-                }
-                exclusiveStock[name] -= 1;
-            }
+            const stock = exclusiveStock[name];
+            if (stock === undefined || stock <= 0) { alert('⛔ Товара нет в наличии!'); return; }
+            exclusiveStock[name] -= 1;
             const existing = cart.find(item => item.name === name && item.size === size);
             if (existing) {
                 existing.qty += 1;
             } else {
-                cart.push({ name, price, size, qty: 1, exclusive: isExclusive });
+                cart.push({ name, price, size, qty: 1, exclusive: isExclusive, stockTracked: true });
             }
             saveCart();
             const icon = document.getElementById('cartIcon');
@@ -766,7 +758,7 @@
 
         function removeFromCart(index) {
             const item = cart[index];
-            if (item.exclusive) {
+            if (item.stockTracked) {
                 exclusiveStock[item.name] = (exclusiveStock[item.name] || 0) + item.qty;
             }
             cart.splice(index, 1);
@@ -775,7 +767,7 @@
 
         function clearCart() {
             cart.forEach(item => {
-                if (item.exclusive) {
+                if (item.stockTracked) {
                     exclusiveStock[item.name] = (exclusiveStock[item.name] || 0) + item.qty;
                 }
             });
@@ -819,25 +811,26 @@
             const productsDiv = document.getElementById(productsContainerId);
             let activeCategory = activeCategories[containerId] || Object.keys(catalogData)[0];
 
+            const soldOutCategory = '__sold_out__';
             function renderCategories() {
+                const allItems = Object.values(catalogData).flat();
+                const categoryNames = Object.keys(catalogData);
+                if (allItems.some(item => (exclusiveStock[item.name] ?? 0) <= 0)) categoryNames.push(soldOutCategory);
+                if (!categoryNames.includes(activeCategory)) activeCategory = categoryNames[0];
                 categoriesDiv.innerHTML = '';
-                Object.keys(catalogData).forEach(cat => {
+                categoryNames.forEach(cat => {
                     const btn = document.createElement('button');
                     btn.className = 'category-btn' + (cat === activeCategory ? ' active' : '');
-                    btn.textContent = cat;
-                    btn.onclick = () => {
-                        activeCategory = cat;
-                        activeCategories[containerId] = cat;
-                        renderCategories();
-                        renderProducts(cat);
-                    };
+                    btn.textContent = cat === soldOutCategory ? 'Нет в наличии' : cat;
+                    btn.onclick = () => { activeCategory = cat; activeCategories[containerId] = cat; renderCategories(); renderProducts(cat); };
                     categoriesDiv.appendChild(btn);
                 });
             }
 
             function renderProducts(category) {
                 productsDiv.innerHTML = '';
-                const items = catalogData[category] || [];
+                const allItems = Object.values(catalogData).flat();
+                const items = category === soldOutCategory ? allItems.filter(item => (exclusiveStock[item.name] ?? 0) <= 0) : (catalogData[category] || []).filter(item => (exclusiveStock[item.name] ?? 0) > 0);
                 const grid = document.createElement('div');
                 grid.className = 'products';
                 items.forEach(item => {
