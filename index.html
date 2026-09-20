@@ -472,6 +472,23 @@
       input,textarea { border-radius:12px!important; border:1px solid #cbd5e1!important; background:#fff!important; color:#172033!important; }
       body.dark input,body.dark textarea { background:#111827!important; color:#f8fafc!important; border-color:#475569!important; }
       @media (max-width:360px) { body { padding:9px; } .header { margin:-9px -9px 12px; } .products { gap:9px!important; } .product-card { padding:8px!important; } .product-card img { height:112px!important; } .tab { font-size:11px!important; } }
+
+      /* Улучшенный тёмный режим и настройки */
+      body.dark { --bg:#0b1020; --card-bg:#131b2d; --text:#eef4ff; --text-secondary:#aab8d0; --border:#27344d; --primary:#7c9cff; --primary-gradient:linear-gradient(135deg,#6d8cff,#a76bff); --shadow:0 16px 42px rgba(0,0,0,.38); background:radial-gradient(circle at 15% -10%,#24356c 0%,transparent 36%),radial-gradient(circle at 100% 10%,#3a1d5a 0%,transparent 30%),#0b1020; }
+      body.dark .header { background:linear-gradient(135deg,#101d43,#2b1952)!important; box-shadow:0 12px 32px rgba(0,0,0,.42)!important; }
+      body.dark .tabs { background:rgba(19,27,45,.86); border-color:rgba(70,89,122,.56); }
+      body.dark .tab { color:#b6c5dc!important; } body.dark .tab.active { background:#778dff!important; border-color:#778dff!important; color:#fff!important; }
+      body.dark .category-btn { background:#172238!important; border-color:#30415f!important; color:#dbe7fa!important; box-shadow:none!important; }
+      body.dark .category-btn.active { background:var(--primary-gradient)!important; border-color:transparent!important; color:#fff!important; }
+      body.dark .product-card { background:linear-gradient(155deg,rgba(24,35,58,.98),rgba(15,23,40,.98))!important; border-color:#2b3a56!important; box-shadow:0 12px 28px rgba(0,0,0,.28)!important; }
+      body.dark .product-card .price { color:#c4b5fd!important; } body.dark .product-card .stock { color:#aebfda!important; }
+      .settings-section { padding:18px!important; } .settings-heading { display:flex; gap:12px; align-items:center; margin-bottom:18px; } .settings-heading>span { display:grid; place-items:center; width:42px; height:42px; border-radius:14px; color:#fff; background:var(--primary-gradient); font-size:21px; } .settings-heading h2 { margin:0!important; font-size:20px; } .settings-heading p { margin:3px 0 0; color:var(--text-secondary); font-size:13px; }
+      .setting-group { margin-bottom:16px!important; padding-bottom:16px!important; } .setting-group label { font-size:14px; color:var(--text-secondary); margin-bottom:9px!important; } .three-options { grid-template-columns:repeat(3,minmax(0,1fr))!important; } .setting-group .options button { min-height:42px!important; font-weight:700; }
+      .setting-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:10px 0; } .setting-row + .setting-row { border-top:1px solid var(--border); } .setting-row b,.setting-row small { display:block; } .setting-row small { margin-top:3px; color:var(--text-secondary); font-size:12px; } .switch { position:relative; min-width:48px!important; min-height:28px!important; padding:3px!important; border-radius:999px!important; border:0!important; background:#94a3b8!important; box-shadow:none!important; } .switch span { display:block; width:22px; height:22px; border-radius:50%; background:#fff; transition:transform .2s ease; } .switch.on { background:var(--primary)!important; } .switch.on span { transform:translateX(20px); }
+      .settings-actions { display:grid; gap:8px; } .secondary-btn { min-height:42px; color:var(--text); background:transparent; border:1px solid var(--border); border-radius:12px; font-weight:700; } body.dark .settings-section { background:rgba(19,27,45,.91)!important; border-color:#2b3a56!important; } body.dark .secondary-btn { background:#18233a; border-color:#30415f; color:#e8efff; }
+      body.compact-cards .products { gap:9px!important; } body.compact-cards .product-card { padding:8px!important; border-radius:15px!important; } body.compact-cards .product-card img { height:112px!important; } body.compact-cards .product-card h3 { margin-top:7px!important; font-size:13px!important; } body.compact-cards .product-card .add-btn { min-height:39px!important; }
+      body.reduce-motion *,body.reduce-motion *::before,body.reduce-motion *::after { animation-duration:.01ms!important; transition-duration:.01ms!important; scroll-behavior:auto!important; }
+      body.dark .cart-popup,body.dark .order-form,body.dark .result-box { background:#131b2d!important; border-color:#2b3a56!important; } body.dark .close-cart,body.dark .cancel { background:#27344d!important; color:#eef4ff!important; }
     </style>
 </head>
 <body>
@@ -504,26 +521,38 @@
         </div>
 
         <div class="settings-section" id="settingsContainer">
-            <h2>⚙️ Настройки</h2>
+            <div class="settings-heading"><span>⚙️</span><div><h2>Настройки магазина</h2><p>Подстройте интерфейс под себя</p></div></div>
             <div class="setting-group">
-                <label>Тема оформления</label>
-                <div class="options" id="themeOptions">
-                    <button data-theme="light" class="active">☀️ Светлая</button>
+                <label>Тема</label>
+                <div class="options three-options" id="themeOptions">
+                    <button data-theme="system">◐ Авто</button>
+                    <button data-theme="light">☀️ Светлая</button>
                     <button data-theme="dark">🌙 Тёмная</button>
                 </div>
             </div>
             <div class="setting-group">
                 <label>Размер текста</label>
                 <div class="options" id="fontSizeOptions">
-                    <button data-size="small">Маленький</button>
-                    <button data-size="medium" class="active">Средний</button>
-                    <button data-size="large">Большой</button>
+                    <button data-size="small">Компактный</button>
+                    <button data-size="medium">Обычный</button>
+                    <button data-size="large">Крупный</button>
                 </div>
             </div>
             <div class="setting-group">
-                <label>Корзина и данные</label>
+                <label>Карточки товаров</label>
+                <div class="options" id="cardViewOptions">
+                    <button data-view="regular">▦ Обычные</button>
+                    <button data-view="compact">▤ Компактные</button>
+                </div>
+            </div>
+            <div class="setting-group setting-toggles">
+                <div class="setting-row"><div><b>Плавные анимации</b><small>Уменьшает движение в интерфейсе</small></div><button class="switch" id="motionToggle" aria-pressed="true"><span></span></button></div>
+                <div class="setting-row"><div><b>Виброотклик</b><small>Лёгкий отклик при действиях</small></div><button class="switch" id="hapticToggle" aria-pressed="true"><span></span></button></div>
+            </div>
+            <div class="setting-group settings-actions">
+                <label>Данные</label>
                 <button class="reset-btn" id="resetCartBtn">🗑 Очистить корзину</button>
-                <button class="reset-btn" id="resetAllBtn" style="background:#6c757d; margin-top:6px;">🔄 Сбросить все</button>
+                <button class="secondary-btn" id="resetPreferencesBtn">↺ Сбросить настройки интерфейса</button>
             </div>
         </div>
 
@@ -573,48 +602,59 @@
 
         // ===== НАСТРОЙКИ =====
         let settings = {
-            theme: storage.getItem('theme') || 'light',
+            theme: storage.getItem('theme') || 'system',
             fontSize: storage.getItem('fontSize') || 'medium',
+            cardView: storage.getItem('cardView') || 'regular',
+            reducedMotion: storage.getItem('reducedMotion') === 'true',
+            haptic: storage.getItem('haptic') !== 'off'
         };
+        const systemDark = window.matchMedia?.('(prefers-color-scheme: dark)');
+        const haptic = (style='light') => { if (settings.haptic) tg?.HapticFeedback?.impactOccurred(style); };
+        const setBodyClass = (name, on) => { document.body.classList.remove(name); if (on) document.body.classList.add(name); };
 
-        // ===== ТЕМЫ =====
         function applyTheme(theme) {
-            theme = theme === 'dark' ? 'dark' : 'light';
-            document.body.classList.remove('dark');
-            if (theme === 'dark') document.body.classList.add('dark');
-            document.querySelectorAll('#themeOptions button').forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.theme === theme);
-            });
+            theme = ['light','dark','system'].includes(theme) ? theme : 'system';
+            settings.theme = theme;
+            const dark = theme === 'dark' || (theme === 'system' && Boolean(systemDark?.matches));
+            setBodyClass('dark', dark);
+            document.querySelectorAll('#themeOptions button').forEach(btn => btn.classList.toggle('active', btn.dataset.theme === theme));
             storage.setItem('theme', theme);
-            // Обновляем кнопку быстрой смены темы
-            document.getElementById('themeToggle').textContent = theme === 'dark' ? '☀️' : '🌙';
+            document.getElementById('themeToggle').textContent = dark ? '☀️' : '🌙';
+            document.getElementById('themeToggle').setAttribute?.('aria-label', dark ? 'Включить светлую тему' : 'Включить тёмную тему');
         }
         applyTheme(settings.theme);
+        systemDark?.addEventListener?.('change', () => { if (settings.theme === 'system') applyTheme('system'); });
+        document.getElementById('themeToggle').addEventListener('click', () => { haptic(); applyTheme(document.body.classList.contains('dark') ? 'light' : 'dark'); });
+        document.querySelectorAll('#themeOptions button').forEach(btn => btn.addEventListener('click', () => { haptic(); applyTheme(btn.dataset.theme); }));
 
-        // Быстрая смена темы (кнопка в шапке) — циклическое переключение
-        document.getElementById('themeToggle').addEventListener('click', function() {
-            const current = storage.getItem('theme') || 'light';
-            applyTheme(current === 'dark' ? 'light' : 'dark');
-        });
-
-        // Выбор темы в настройках
-        document.querySelectorAll('#themeOptions button').forEach(btn => {
-            btn.addEventListener('click', () => applyTheme(btn.dataset.theme));
-        });
-
-        // ===== РАЗМЕР ШРИФТА =====
         function setFontSize(size) {
+            size = ['small','medium','large'].includes(size) ? size : 'medium';
+            settings.fontSize = size;
             document.body.classList.remove('font-small', 'font-medium', 'font-large');
             document.body.classList.add('font-' + size);
             storage.setItem('fontSize', size);
-            document.querySelectorAll('#fontSizeOptions button').forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.size === size);
-            });
+            document.querySelectorAll('#fontSizeOptions button').forEach(btn => btn.classList.toggle('active', btn.dataset.size === size));
         }
-        setFontSize(settings.fontSize);
-        document.querySelectorAll('#fontSizeOptions button').forEach(btn => {
-            btn.addEventListener('click', () => setFontSize(btn.dataset.size));
-        });
+        function setCardView(view) {
+            view = view === 'compact' ? 'compact' : 'regular';
+            settings.cardView = view;
+            setBodyClass('compact-cards', view === 'compact');
+            storage.setItem('cardView', view);
+            document.querySelectorAll('#cardViewOptions button').forEach(btn => btn.classList.toggle('active', btn.dataset.view === view));
+        }
+        function setToggle(id, key, value) {
+            settings[key] = value;
+            storage.setItem(key === 'reducedMotion' ? 'reducedMotion' : 'haptic', value ? 'true' : 'off');
+            const el = document.getElementById(id);
+            el.classList.toggle('on', value); el.setAttribute?.('aria-pressed', String(value));
+            if (key === 'reducedMotion') setBodyClass('reduce-motion', value);
+        }
+        setFontSize(settings.fontSize); setCardView(settings.cardView);
+        setToggle('motionToggle','reducedMotion',settings.reducedMotion); setToggle('hapticToggle','haptic',settings.haptic);
+        document.querySelectorAll('#fontSizeOptions button').forEach(btn => btn.addEventListener('click', () => { haptic(); setFontSize(btn.dataset.size); }));
+        document.querySelectorAll('#cardViewOptions button').forEach(btn => btn.addEventListener('click', () => { haptic(); setCardView(btn.dataset.view); }));
+        document.getElementById('motionToggle').addEventListener('click', () => setToggle('motionToggle','reducedMotion',!settings.reducedMotion));
+        document.getElementById('hapticToggle').addEventListener('click', () => { const next=!settings.haptic; setToggle('hapticToggle','haptic',next); if(next) haptic(); });
 
         // ===== КАТАЛОГИ =====
         const catalog = {
@@ -977,9 +1017,12 @@
             clearCart();
             alert('Корзина очищена!');
         });
-        document.getElementById('resetAllBtn').addEventListener('click', () => {
-            ['cart', 'theme', 'fontSize'].forEach(key => storage.removeItem(key));
-            location.reload();
+        document.getElementById('resetPreferencesBtn').addEventListener('click', () => {
+            ['theme', 'fontSize', 'cardView', 'reducedMotion', 'haptic'].forEach(key => storage.removeItem(key));
+            settings = {theme:'system',fontSize:'medium',cardView:'regular',reducedMotion:false,haptic:true};
+            applyTheme(settings.theme); setFontSize(settings.fontSize); setCardView(settings.cardView);
+            setToggle('motionToggle','reducedMotion',false); setToggle('hapticToggle','haptic',true);
+            haptic('medium');
         });
 
         // ===== ИНИЦИАЛИЗАЦИЯ =====
