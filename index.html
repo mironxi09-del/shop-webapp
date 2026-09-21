@@ -44,9 +44,9 @@
             min-height: 100vh;
         }
         .header {
-            display: flex;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
             align-items: center;
-            justify-content: space-between;
             margin-bottom: 14px;
             padding-bottom: 10px;
             border-bottom: 2px solid var(--primary);
@@ -63,6 +63,7 @@
             display: flex;
             align-items: center;
             gap: 10px;
+            justify-self: end;
         }
         .theme-toggle, .nav-btn {
             background: var(--card-bg);
@@ -280,9 +281,10 @@
         }
         .cart-actions .checkout { background: var(--primary); color: #fff; }
         .cart-actions .close-cart { background: var(--border); color: var(--text); }
-        .balance-card { margin: 0 0 14px; padding: 13px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px; border:1px solid var(--border); border-radius:16px; background:var(--card-bg); box-shadow:var(--shadow); }
-        .balance-card small { display:block; margin-top:2px; color:var(--text-secondary); }
-        .balance-amount { font-size:18px; font-weight:800; white-space:nowrap; }
+        .header-balance { display:flex; align-items:center; gap:6px; min-width:0; color:#fff; font-size:12px; line-height:1.05; }
+        .header-balance small { display:block; opacity:.78; font-size:10px; }
+        .header-balance b { display:block; margin-top:2px; font-size:13px; white-space:nowrap; }
+        .balance-hint { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
         .balance-note { margin:10px 0 0; color:var(--text-secondary); font-size:12px; line-height:1.45; }
 
         .order-form {
@@ -296,6 +298,13 @@
             animation: slideUp 0.3s ease;
         }
         .order-form h3 { margin-bottom: 14px; }
+        .order-summary { color:var(--text-secondary); line-height:1.45; }
+        .order-pricing { display:grid; gap:8px; margin:14px 0 2px; padding:12px; border:1px solid var(--border); border-radius:12px; background:var(--bg); }
+        .order-pricing div { display:flex; justify-content:space-between; gap:12px; }
+        .order-pricing .discount { color:#15803d; }
+        .order-pricing .final { padding-top:8px; border-top:1px solid var(--border); font-size:calc(var(--font-size)*1.05); }
+        .promo-status { min-height:18px; margin:6px 0 0; color:var(--text-secondary); font-size:12px; }
+        .promo-status.ok { color:#15803d; } .promo-status.error { color:#b91c1c; }
         .order-form label {
             display: block;
             font-size: calc(var(--font-size)*0.85);
@@ -475,7 +484,7 @@
       .reset-btn { width:100%; }
       input,textarea { border-radius:12px!important; border:1px solid #cbd5e1!important; background:#fff!important; color:#172033!important; }
       body.dark input,body.dark textarea { background:#111827!important; color:#f8fafc!important; border-color:#475569!important; }
-      @media (max-width:360px) { body { padding:9px; } .header { margin:-9px -9px 12px; } .products { gap:9px!important; } .product-card { padding:8px!important; } .product-card img { height:112px!important; } .tab { font-size:11px!important; } }
+      @media (max-width:360px) { body { padding:9px; } .header { margin:-9px -9px 12px; padding:15px 10px; } .header h1 { font-size:19px!important; } .header-balance b { font-size:11px; } .products { gap:9px!important; } .product-card { padding:8px!important; } .product-card img { height:112px!important; } .tab { font-size:11px!important; } }
 
       /* Улучшенный тёмный режим и настройки */
       body.dark { --bg:#0b1020; --card-bg:#131b2d; --text:#eef4ff; --text-secondary:#aab8d0; --border:#27344d; --primary:#7c9cff; --primary-gradient:linear-gradient(135deg,#6d8cff,#a76bff); --shadow:0 16px 42px rgba(0,0,0,.38); background:radial-gradient(circle at 15% -10%,#24356c 0%,transparent 36%),radial-gradient(circle at 100% 10%,#3a1d5a 0%,transparent 30%),#0b1020; }
@@ -498,6 +507,10 @@
 <body>
     <div id="app">
         <div class="header">
+            <div class="header-balance" aria-live="polite">
+                <span>💳</span><div><small>Баланс</small><b id="balanceAmount">—</b></div>
+                <span class="balance-hint" id="balanceHint">Загружаем баланс…</span>
+            </div>
             <h1>🛍 Магазин</h1>
             <div class="header-actions">
                 <button class="theme-toggle" id="themeToggle">🌙</button>
@@ -520,10 +533,6 @@
                 <select id="productSort" aria-label="Сортировка" style="flex:1;padding:12px;border-radius:12px;background:var(--card-bg);color:var(--text);border:1px solid var(--border)"><option value="default">По умолчанию</option><option value="asc">Сначала дешевле</option><option value="desc">Сначала дороже</option><option value="name">По названию</option></select>
                 <button id="favoritesFilter" class="secondary-btn" aria-pressed="false">♡ Избранное</button>
             </div>
-        </div>
-        <div class="balance-card" id="balanceCard" aria-live="polite">
-            <div><b>💳 Баланс</b><small id="balanceHint">Загружаем баланс…</small></div>
-            <div class="balance-amount" id="balanceAmount">—</div>
         </div>
         <div id="catalogContainer">
             <div class="categories" id="categories"></div>
@@ -587,7 +596,12 @@
         <!-- Форма заказа -->
         <div class="order-form" id="orderForm">
             <h3>Оформление заказа</h3>
-            <p id="orderSummary"></p>
+            <p id="orderSummary" class="order-summary"></p>
+            <div class="order-pricing" aria-live="polite">
+                <div><span>Товары</span><b id="orderSubtotal">0 ₽</b></div>
+                <div class="discount"><span>Скидка по промокоду</span><b id="orderDiscount">−0 ₽</b></div>
+                <div class="final"><span>К списанию</span><b id="orderFinal">0 ₽</b></div>
+            </div>
             <label for="nameInput">Ваше имя</label>
             <input type="text" id="nameInput" maxlength="100" placeholder="Иван Иванов" />
             <label for="addressInput">Адрес доставки</label>
@@ -596,7 +610,8 @@
             <input type="email" id="emailInput" maxlength="120" placeholder="example@mail.com" />
             <label for="promoInput">Промокод</label>
             <input type="text" id="promoInput" maxlength="24" autocapitalize="characters" placeholder="Например, WELCOME" />
-            <p class="balance-note">Оплата заказа списывается с баланса. Промокод проверяется при оформлении; итоговую сумму и остаток пришлёт бот.</p>
+            <p id="promoStatus" class="promo-status">Введите промокод, чтобы увидеть скидку.</p>
+            <p class="balance-note">Оплата заказа списывается с баланса. Итоговая проверка происходит у бота при оформлении.</p>
             <div class="form-actions">
                 <button class="cancel" id="cancelOrderForm">Отмена</button>
                 <button class="submit" id="submitOrder">✅ Оформить</button>
@@ -634,6 +649,28 @@
                 const data = await response.json();
                 showBalance(data.balance, 'Доступно для оплаты заказов');
             } catch { showBalance(null, 'Не удалось загрузить баланс. Попробуйте открыть приложение снова.'); }
+        }
+        const rubles = value => `${Math.max(0, Number(value) || 0).toLocaleString('ru-RU')} ₽`;
+        const cartTotalAmount = () => cart.reduce((sum,item) => sum + Number(String(item.price).replace(/[^\d]/g,''))*item.qty, 0);
+        let promoPreviewTimer, promoPreviewRequest = 0;
+        function setOrderPricing(total, discount=0, status='', state='') {
+            const final=Math.max(0,total-discount);
+            document.getElementById('orderSubtotal').textContent=rubles(total);
+            document.getElementById('orderDiscount').textContent=`−${rubles(discount)}`;
+            document.getElementById('orderFinal').textContent=rubles(final);
+            const notice=document.getElementById('promoStatus'); notice.textContent=status; notice.className=`promo-status ${state}`;
+        }
+        async function previewPromo() {
+            const total=cartTotalAmount(); const code=document.getElementById('promoInput').value.trim().toUpperCase();
+            if (!code) { setOrderPricing(total,0,'Введите промокод, чтобы увидеть скидку.'); return; }
+            const requestId=++promoPreviewRequest; setOrderPricing(total,0,'Проверяем промокод…');
+            if (!tg?.initData || typeof fetch!=='function') { setOrderPricing(total,0,'Промокод будет проверен ботом при оформлении.'); return; }
+            try {
+                const response=await fetch(`${API_URL}/promo-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({init_data:tg.initData,code,total})});
+                const data=await response.json(); if (requestId!==promoPreviewRequest) return;
+                if (!response.ok || !data.valid) { setOrderPricing(total,0,data.message||'Промокод недействителен.', 'error'); return; }
+                setOrderPricing(total,data.discount,`Промокод ${data.code}: скидка ${rubles(data.discount)}.`, 'ok');
+            } catch { if (requestId===promoPreviewRequest) setOrderPricing(total,0,'Не удалось проверить промокод. Бот проверит его при оформлении.'); }
         }
 
         // ===== НАСТРОЙКИ =====
@@ -1030,6 +1067,7 @@
             form.style.display = 'block';
             const itemsStr = cart.map(it => `${it.name} (x${it.qty}, размер ${it.size})`).join(', ');
             document.getElementById('orderSummary').textContent = `Ваш заказ: ${itemsStr}`;
+            previewPromo();
             if (!document.getElementById('nameInput').value && defaultName) {
                 document.getElementById('nameInput').value = defaultName;
             }
@@ -1040,6 +1078,7 @@
         document.getElementById('cancelOrderForm').addEventListener('click', function() {
             document.getElementById('orderForm').style.display = 'none';
         });
+        document.getElementById('promoInput').addEventListener('input', () => { clearTimeout(promoPreviewTimer); promoPreviewTimer=setTimeout(previewPromo,350); });
 
         let sending = false;
         document.getElementById('submitOrder').addEventListener('click', function() {

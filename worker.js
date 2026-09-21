@@ -192,6 +192,14 @@ async function redeemPromo(env,code,total) {
 }
 const releasePromo=(env,code)=>code?env.DB.prepare('UPDATE promo_codes SET used_count=MAX(0,used_count-1) WHERE code=?').bind(code).run():Promise.resolve();
 function promoErrorText(error) { return error==='promo_min'?'Промокод действует только при большей сумме заказа.':'Промокод недействителен, закончился или уже использован.'; }
+async function previewPromo(env,rawCode,total) {
+  const code=typeof rawCode==='string'?rawCode.trim().toUpperCase():'';
+  if (!code || !/^[A-Z0-9_-]{3,24}$/.test(code) || !Number.isSafeInteger(total) || total<1 || total>100000000) return {valid:false,message:'Проверьте промокод и сумму заказа.'};
+  await ensureCommerce(env); const now=Date.now(); const promo=await env.DB.prepare('SELECT code,discount_type,discount_value,max_activations,used_count,valid_until,min_order_total,active FROM promo_codes WHERE code=?').bind(code).first();
+  if (!promo || !promo.active || promo.used_count>=promo.max_activations || (promo.valid_until && promo.valid_until<now)) return {valid:false,message:'Промокод недействителен, закончился или уже использован.'};
+  if (total<promo.min_order_total) return {valid:false,message:`Промокод действует для заказа от ${promo.min_order_total.toLocaleString('ru-RU')} ₽.`};
+  return {valid:true,code,discount:Math.min(total,promo.discount_type==='percent'?Math.floor(total*promo.discount_value/100):promo.discount_value)};
+}
 async function webAppUser(initData,env) {
   if (typeof initData!=='string' || initData.length<20 || initData.length>8192) throw Error('init_data');
   const params=new URLSearchParams(initData), hash=params.get('hash'), authDate=Number(params.get('auth_date'));
@@ -384,12 +392,17 @@ export default {
         return new Response('Webhook repaired: message and callback_query enabled.');
       } catch { return new Response('Webhook repair failed.',{status:503}); }
     }
-    if (request.method==='OPTIONS' && (path==='/inventory' || path==='/account')) return new Response(null,{headers:corsHeaders});
+    if (request.method==='OPTIONS' && (path==='/inventory' || path==='/account' || path==='/promo-preview')) return new Response(null,{headers:corsHeaders});
     if (request.method==='GET' && path==='/inventory') { if (!env.DB) return new Response('Not configured',{status:503,headers:corsHeaders}); return Response.json(await inventory(env),{headers:corsHeaders}); }
     if (request.method==='POST' && path==='/account') {
       if (!env.DB || !env.BOT_TOKEN) return new Response('Not configured',{status:503,headers:corsHeaders});
       try { const raw=await request.text(); if (new TextEncoder().encode(raw).length>10000) throw Error('payload'); const user=await webAppUser(JSON.parse(raw).init_data,env); return Response.json({balance:await balanceFor(env,user.id)},{headers:corsHeaders}); }
       catch { return new Response('Forbidden',{status:403,headers:corsHeaders}); }
+    }
+    if (request.method==='POST' && path==='/promo-preview') {
+      if (!env.DB || !env.BOT_TOKEN) return new Response('Not configured',{status:503,headers:corsHeaders});
+      try { const raw=await request.text(); if (new TextEncoder().encode(raw).length>10000) throw Error('payload'); const data=JSON.parse(raw); await webAppUser(data.init_data,env); const result=await previewPromo(env,data.code,data.total); return Response.json(result,{status:result.valid?200:400,headers:corsHeaders}); }
+      catch { return Response.json({valid:false,message:'Не удалось проверить промокод.'},{status:400,headers:corsHeaders}); }
     }
     if (request.method==='GET' && path==='/') return new Response('Telegram shop webhook.');
     if (request.method!=='POST' || path!=='/telegram') return new Response('Not found',{status:404});
