@@ -167,9 +167,43 @@ const statuses={sent:'🆕 Новый',processing:'🟡 В работе',shipped
 const statusButtons=id=>({inline_keyboard:[[{text:'🟡 В работе',callback_data:`status:${id}:processing`},{text:'🚚 Доставка',callback_data:`status:${id}:shipped`}],[{text:'✅ Завершён',callback_data:`status:${id}:done`},{text:'❌ Отменить',callback_data:`status:${id}:cancelled`}]]});
 const isAdmin=(env,id)=>String(id)===String(env.ADMIN_CHAT_ID);
 const INVENTORY_PRODUCTS=Object.entries(CATALOG).map(([name,product])=>({name,initial:product.limit,limited:product.limit<99}));
-const corsHeaders={'Access-Control-Allow-Origin':'https://mironxi09-del.github.io','Access-Control-Allow-Methods':'GET, OPTIONS','Cache-Control':'no-store'};
+const corsHeaders={'Access-Control-Allow-Origin':'https://mironxi09-del.github.io','Access-Control-Allow-Methods':'GET, POST, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
 async function ensureInventory(env) { await env.DB.prepare('CREATE TABLE IF NOT EXISTS inventory (name TEXT PRIMARY KEY, stock INTEGER NOT NULL CHECK(stock>=0), updated_at INTEGER NOT NULL)').run(); const now=Date.now(); await env.DB.batch(INVENTORY_PRODUCTS.map(item=>env.DB.prepare('INSERT OR IGNORE INTO inventory (name,stock,updated_at) VALUES (?,?,?)').bind(item.name,item.initial,now))); }
 async function inventory(env) { await ensureInventory(env); const rows=(await env.DB.prepare('SELECT name,stock FROM inventory').all()).results||[]; return Object.fromEntries(rows.map(row=>[row.name,row.stock])); }
+async function ensureCommerce(env) {
+  await ensureInventory(env);
+  await env.DB.batch([
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS balances (user_id INTEGER PRIMARY KEY, balance INTEGER NOT NULL DEFAULT 0 CHECK(balance>=0), updated_at INTEGER NOT NULL)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS promo_codes (code TEXT PRIMARY KEY, discount_type TEXT NOT NULL CHECK(discount_type IN (\'percent\',\'fixed\')), discount_value INTEGER NOT NULL CHECK(discount_value>0), max_activations INTEGER NOT NULL CHECK(max_activations>0), used_count INTEGER NOT NULL DEFAULT 0 CHECK(used_count>=0), valid_until INTEGER NOT NULL DEFAULT 0, min_order_total INTEGER NOT NULL DEFAULT 0 CHECK(min_order_total>=0), active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)')
+  ]);
+}
+async function balanceFor(env,userId) { await ensureCommerce(env); await env.DB.prepare('INSERT OR IGNORE INTO balances (user_id,balance,updated_at) VALUES (?,?,?)').bind(userId,0,Date.now()).run(); return (await env.DB.prepare('SELECT balance FROM balances WHERE user_id=?').bind(userId).first())?.balance||0; }
+async function creditBalance(env,userId,amount) { await ensureCommerce(env); await env.DB.prepare('INSERT OR IGNORE INTO balances (user_id,balance,updated_at) VALUES (?,?,?)').bind(userId,0,Date.now()).run(); await env.DB.prepare('UPDATE balances SET balance=balance+?,updated_at=? WHERE user_id=?').bind(amount,Date.now(),userId).run(); return balanceFor(env,userId); }
+async function debitBalance(env,userId,amount) { await ensureCommerce(env); await env.DB.prepare('INSERT OR IGNORE INTO balances (user_id,balance,updated_at) VALUES (?,?,?)').bind(userId,0,Date.now()).run(); const result=await env.DB.prepare('UPDATE balances SET balance=balance-?,updated_at=? WHERE user_id=? AND balance>=?').bind(amount,Date.now(),userId,amount).run(); return Boolean(result.meta.changes); }
+async function redeemPromo(env,code,total) {
+  if (!code) return {code:'',discount:0};
+  await ensureCommerce(env); const now=Date.now(); const promo=await env.DB.prepare('SELECT * FROM promo_codes WHERE code=?').bind(code).first();
+  if (!promo || !promo.active || promo.used_count>=promo.max_activations || (promo.valid_until && promo.valid_until<now)) throw Error('promo_invalid');
+  if (total<promo.min_order_total) throw Error('promo_min');
+  const discount=Math.min(total,promo.discount_type==='percent'?Math.floor(total*promo.discount_value/100):promo.discount_value);
+  const claim=await env.DB.prepare('UPDATE promo_codes SET used_count=used_count+1 WHERE code=? AND active=1 AND used_count<max_activations AND (valid_until=0 OR valid_until>=?)').bind(code,now).run();
+  if (!claim.meta.changes) throw Error('promo_invalid');
+  return {code,discount};
+}
+const releasePromo=(env,code)=>code?env.DB.prepare('UPDATE promo_codes SET used_count=MAX(0,used_count-1) WHERE code=?').bind(code).run():Promise.resolve();
+function promoErrorText(error) { return error==='promo_min'?'Промокод действует только при большей сумме заказа.':'Промокод недействителен, закончился или уже использован.'; }
+async function webAppUser(initData,env) {
+  if (typeof initData!=='string' || initData.length<20 || initData.length>8192) throw Error('init_data');
+  const params=new URLSearchParams(initData), hash=params.get('hash'), authDate=Number(params.get('auth_date'));
+  if (!hash || !Number.isSafeInteger(authDate) || Math.abs(Date.now()/1000-authDate)>7*24*60*60) throw Error('init_data');
+  params.delete('hash'); const check=[...params.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${k}=${v}`).join('\n'); const bytes=new TextEncoder();
+  const key=await crypto.subtle.importKey('raw',bytes.encode('WebAppData'),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+  const secret=await crypto.subtle.sign('HMAC',key,bytes.encode(env.BOT_TOKEN));
+  const verifyKey=await crypto.subtle.importKey('raw',secret,{name:'HMAC',hash:'SHA-256'},false,['sign']);
+  const signature=[...new Uint8Array(await crypto.subtle.sign('HMAC',verifyKey,bytes.encode(check)))].map(x=>x.toString(16).padStart(2,'0')).join('');
+  if (signature!==hash) throw Error('init_data');
+  const user=JSON.parse(params.get('user')||'{}'); if (!Number.isSafeInteger(user?.id)) throw Error('init_data'); return user;
+}
 async function reserveStock(env,d) { const totals=new Map(); for (const item of d.items) totals.set(item.name,(totals.get(item.name)||0)+item.qty); if (!totals.size) return []; await ensureInventory(env); const reserved=[]; try { for (const [name,qty] of totals) { const result=await env.DB.prepare('UPDATE inventory SET stock=stock-?,updated_at=? WHERE name=? AND stock>=?').bind(qty,Date.now(),name,qty).run(); if (!result.meta.changes) throw Error('out_of_stock'); reserved.push([name,qty]); } return reserved; } catch (error) { await env.DB.batch(reserved.map(([name,qty])=>env.DB.prepare('UPDATE inventory SET stock=stock+?,updated_at=? WHERE name=?').bind(qty,Date.now(),name))); throw error; } }
 async function changeStock(env,index,delta) { const item=INVENTORY_PRODUCTS[index]; if (!item || !Number.isInteger(delta) || ![-1,1].includes(delta)) throw Error('stock_action'); await ensureInventory(env); const sql=delta>0?'UPDATE inventory SET stock=stock+1,updated_at=? WHERE name=?':'UPDATE inventory SET stock=stock-1,updated_at=? WHERE name=? AND stock>0'; const result=await env.DB.prepare(sql).bind(Date.now(),item.name).run(); if (!result.meta.changes && delta<0) throw Error('stock_empty'); }
 async function stockPanel(env,page=0) {
@@ -184,7 +218,7 @@ async function showStockPanel(env,chat) { const panel=await stockPanel(env,0); a
 export function validateOrder(raw) {
   if (typeof raw !== 'string' || new TextEncoder().encode(raw).length > 4096) throw Error('payload');
   const d = JSON.parse(raw);
-  if (!d || Array.isArray(d) || d.version !== 1 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(d.order_id)) throw Error('format');
+  if (!d || Array.isArray(d) || ![1,2].includes(d.version) || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(d.order_id)) throw Error('format');
   for (const [key,min,max] of [['name',1,100],['address',5,500],['email',3,120]]) {
     if (typeof d[key] !== 'string') throw Error('field');
     d[key] = d[key].trim();
@@ -201,7 +235,9 @@ export function validateOrder(raw) {
     total+=p.price*row.qty;
     lines.push(`• ${row.name}, размер ${row.size} × ${row.qty}: ${p.price*row.qty} ₽`);
   }
-  return {...d,order_id:d.order_id.toLowerCase(),total,lines:lines.join('\n')};
+  const promo_code=typeof d.promo_code==='string'?d.promo_code.trim().toUpperCase():'';
+  if (promo_code && !/^[A-Z0-9_-]{3,24}$/.test(promo_code)) throw Error('promo');
+  return {...d,order_id:d.order_id.toLowerCase(),promo_code,total,lines:lines.join('\n')};
 }
 
 async function telegram(env, method, body) {
@@ -218,6 +254,20 @@ async function showOrders(env,chat) {
   const rows=(await env.DB.prepare('SELECT order_id,state,address,created_at FROM orders ORDER BY created_at DESC LIMIT 20').all()).results||[];
   const text=rows.length?'<b>Последние 20 заказов</b>\n\n'+rows.map((x,i)=>`${i+1}. <b>#${x.order_id.slice(0,8)}</b> — ${statuses[x.state]||x.state}\n📍 ${x.address}`).join('\n\n'):'Заказов пока нет.';
   await send(env,chat,text,{parse_mode:'HTML'});
+}
+async function showPromos(env,chat) {
+  await ensureCommerce(env); const rows=(await env.DB.prepare('SELECT code,discount_type,discount_value,max_activations,used_count,valid_until,min_order_total,active FROM promo_codes ORDER BY created_at DESC LIMIT 20').all()).results||[];
+  const text=rows.length?'<b>🎟 Промокоды</b>\n\n'+rows.map(x=>`<b>${x.code}</b> — ${x.discount_type==='percent'?x.discount_value+'%':x.discount_value+' ₽'}\nАктивации: ${x.used_count}/${x.max_activations} · ${x.active?'активен':'выключен'}\n${x.valid_until?'До: '+new Date(x.valid_until).toLocaleDateString('ru-RU'):'Без срока'}${x.min_order_total?' · от '+x.min_order_total+' ₽':''}`).join('\n\n'):'Промокодов пока нет.';
+  await send(env,chat,text,{parse_mode:'HTML'});
+}
+async function createPromo(env,parts) {
+  const [command,rawCode,type,rawValue,rawUses,rawDays,rawMin]=parts;
+  if (command!=='add' || !/^[A-Z0-9_-]{3,24}$/.test(rawCode||'') || !['percent','fixed'].includes(type)) throw Error('promo_command');
+  const value=Number(rawValue), uses=Number(rawUses), days=Number(rawDays), min=Number(rawMin||0);
+  if (!Number.isInteger(value) || value<1 || (type==='percent'&&value>100) || !Number.isInteger(uses) || uses<1 || uses>100000 || !Number.isInteger(days) || days<0 || days>3650 || !Number.isInteger(min) || min<0 || min>100000000) throw Error('promo_command');
+  await ensureCommerce(env); const now=Date.now(); const validUntil=days?now+days*86400000:0;
+  await env.DB.prepare('INSERT INTO promo_codes (code,discount_type,discount_value,max_activations,used_count,valid_until,min_order_total,active,created_at) VALUES (?,?,?,?,0,?,?,1,?)').bind(rawCode,type,value,uses,validUntil,min,now).run();
+  return {code:rawCode,type,value,uses,validUntil,min};
 }
 async function processCallback(q,env) {
   const callbackId=q?.id; if (!callbackId) return;
@@ -257,12 +307,30 @@ async function processUpdate(update,env) {
     return;
   }
   if (m.text==='❓ Помощь' || /^\/help(?:@\w+)?$/.test(m.text||'')) {
-    await send(env,m.chat.id,'🛍 Как заказать\nОткройте магазин, выберите размер и товары, затем укажите адрес в корзине.\n\n❤️ Избранное и поиск находятся в магазине.\n📦 /myorders — ваши последние заказы и статусы.\n📍 /address — адрес последнего заказа.\n\nСтатусы: Новый → В работе → В доставке → Завершён. Изменения статуса приходят сюда автоматически.'+(isAdmin(env,user.id)?'\n\n⚙️ Администратору\n/admin — остатки\n/orders — все последние заказы\n/stats — статистика':''),{reply_markup:keyboard});
+    await send(env,m.chat.id,'🛍 Как заказать\nОткройте магазин, выберите размер и товары, затем укажите адрес и промокод при оформлении. Заказ оплачивается с баланса.\n\n💳 /balance — ваш баланс.\n📦 /myorders — ваши последние заказы и статусы.\n📍 /address — адрес последнего заказа.\n\nСтатусы: Новый → В работе → В доставке → Завершён. Изменения статуса приходят сюда автоматически.'+(isAdmin(env,user.id)?'\n\n⚙️ Администратору\n/admin — остатки\n/orders — все последние заказы\n/stats — статистика\n/promos — промокоды\n/promo add CODE percent 10 50 30 1000 — создать: код, тип скидки, размер, активации, дни, минимум заказа\n/promo disable CODE — выключить\n/balance ID СУММА — зачислить баланс пользователю':''),{reply_markup:keyboard});
     return;
   }
   if (/^\/(stock|admin)(?:@\w+)?$/.test(m.text||'') || m.text==='⚙️ Админ-панель') { if (isAdmin(env,user.id)) await showStockPanel(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
   if (/^\/orders(?:@\w+)?$/.test(m.text||'')) { if (isAdmin(env,user.id)) await showOrders(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
   if (/^\/stats(?:@\w+)?$/.test(m.text||'')) { if (!isAdmin(env,user.id)) return; const rows=(await env.DB.prepare('SELECT state,COUNT(*) AS n FROM orders GROUP BY state').all()).results||[]; await send(env,m.chat.id,'<b>Статистика заказов</b>\n'+Object.entries(statuses).map(([k,v])=>`${v}: ${rows.find(x=>x.state===k)?.n||0}`).join('\n'),{parse_mode:'HTML'}); return; }
+  if (/^\/balance(?:@\w+)?(?:\s|$)/.test(m.text||'')) {
+    const args=(m.text||'').replace(/^\/balance(?:@\w+)?\s*/,'').trim().split(/\s+/).filter(Boolean);
+    if (isAdmin(env,user.id) && args.length===2 && /^\d+$/.test(args[0]) && /^\d+$/.test(args[1])) {
+      const target=Number(args[0]), amount=Number(args[1]); if (!Number.isSafeInteger(target) || !Number.isSafeInteger(amount) || amount<1 || amount>100000000) { await send(env,m.chat.id,'Сумма должна быть целым числом от 1 до 100 000 000 ₽.'); return; }
+      const balance=await creditBalance(env,target,amount); await send(env,m.chat.id,`💳 Пользователю ${target} зачислено ${amount.toLocaleString('ru-RU')} ₽. Новый баланс: ${balance.toLocaleString('ru-RU')} ₽.`); return;
+    }
+    const balance=await balanceFor(env,user.id); await send(env,m.chat.id,`💳 Ваш баланс: <b>${balance.toLocaleString('ru-RU')} ₽</b>\n\nПополнение появится после подключения защищённой оплаты. Сейчас администратор может зачислить средства вручную.`,{parse_mode:'HTML',reply_markup:keyboard}); return;
+  }
+  if (/^\/promos(?:@\w+)?$/.test(m.text||'')) { if (!isAdmin(env,user.id)) { await send(env,m.chat.id,'Эта команда доступна администратору.'); return; } await showPromos(env,m.chat.id); return; }
+  if (/^\/promo(?:@\w+)?(?:\s|$)/.test(m.text||'')) {
+    if (!isAdmin(env,user.id)) { await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
+    const parts=(m.text||'').replace(/^\/promo(?:@\w+)?\s*/,'').trim().toUpperCase().split(/\s+/); const command=(parts[0]||'').toLowerCase();
+    try {
+      if (command==='add') { parts[0]='add'; parts[2]=(parts[2]||'').toLowerCase(); const p=await createPromo(env,parts); await send(env,m.chat.id,`✅ Промокод ${p.code} создан: ${p.type==='percent'?p.value+'%':p.value+' ₽'}, активаций: ${p.uses}${p.validUntil?', до '+new Date(p.validUntil).toLocaleDateString('ru-RU'):''}${p.min?', от '+p.min+' ₽':''}.`); return; }
+      if (command==='disable' && /^[A-Z0-9_-]{3,24}$/.test(parts[1]||'')) { await ensureCommerce(env); const result=await env.DB.prepare('UPDATE promo_codes SET active=0 WHERE code=?').bind(parts[1]).run(); await send(env,m.chat.id,result.meta.changes?`Промокод ${parts[1]} выключен.`:'Промокод не найден.'); return; }
+    } catch { await send(env,m.chat.id,'Не удалось создать промокод. Проверьте формат: /promo add CODE percent 10 50 30 1000'); return; }
+    await send(env,m.chat.id,'Промокоды:\n/promo add CODE percent 10 50 30 1000\nТип скидки: percent или fixed. Затем: размер скидки, число активаций, срок в днях (0 — без срока), минимальная сумма (0 — без минимума).\n/promo disable CODE'); return;
+  }
   if (m.text==='📍 Мой адрес' || /^\/address(?:@\w+)?$/.test(m.text||'')) {
     const row=await env.DB.prepare("SELECT address FROM orders WHERE user_id=? AND state IN ('sent','processing','shipped','done') ORDER BY created_at DESC LIMIT 1").bind(user.id).first();
     await send(env,m.chat.id,row?'Ваш адрес:\n'+row.address:'Вы ещё не оформляли заказ.');
@@ -272,8 +340,7 @@ async function processUpdate(update,env) {
   let d;
   try { d=validateOrder(m.web_app_data.data); }
   catch { await send(env,m.chat.id,'Не удалось принять заказ: проверьте поля и количество товаров.',{reply_markup:keyboard});return; }
-  const adminText=`НОВЫЙ ЗАКАЗ № ${d.order_id}\nПокупатель: ${d.name}\nTelegram: ${user.username?'@'+user.username:'username не указан'}; ID: ${user.id}\nАдрес: ${d.address}\nEmail: ${d.email}\n\n${d.lines}\n\nИтого: ${d.total} ₽\nНаличие и доставку подтвердите покупателю.`;
-  if (adminText.length>4000) {await send(env,m.chat.id,'Заказ слишком длинный. Разделите его на несколько заказов.');return;}
+  await ensureCommerce(env);
   // Unique ID prevents duplicate delivery for already acknowledged orders.
   await env.DB.prepare('INSERT OR IGNORE INTO orders (user_id,order_id,address,state,created_at,locked_at,notified) VALUES (?,?,?,\'pending\',?,0,0)').bind(user.id,d.order_id,d.address,Date.now()).run();
   const row=await env.DB.prepare('SELECT state,notified FROM orders WHERE user_id=? AND order_id=?').bind(user.id,d.order_id).first();
@@ -281,16 +348,28 @@ async function processUpdate(update,env) {
     const now=Date.now();
     const claim=await env.DB.prepare("UPDATE orders SET state='sending',locked_at=? WHERE user_id=? AND order_id=? AND (state='pending' OR (state='sending' AND locked_at<?))").bind(now,user.id,d.order_id,now-90000).run();
     if (!claim.meta.changes) throw Error('order_busy');
-    let reserved=[];
-    try { reserved=await reserveStock(env,d); await send(env,env.ADMIN_CHAT_ID,adminText,{reply_markup:statusButtons(d.order_id)}); }
-    catch (e) { if (reserved.length) await env.DB.batch(reserved.map(([name,qty])=>env.DB.prepare('UPDATE inventory SET stock=stock+?,updated_at=? WHERE name=?').bind(qty,Date.now(),name))); 
-      await env.DB.prepare("UPDATE orders SET state='pending' WHERE user_id=? AND order_id=?").bind(user.id,d.order_id).run();
-      throw e;
+    let reserved=[], promo={code:'',discount:0}, paidTotal=0, debited=false;
+    try {
+      promo=await redeemPromo(env,d.promo_code,d.total); paidTotal=d.total-promo.discount;
+      if (!await debitBalance(env,user.id,paidTotal)) throw Error('insufficient_balance'); debited=true;
+      reserved=await reserveStock(env,d);
+      const adminText=`НОВЫЙ ЗАКАЗ № ${d.order_id}\nПокупатель: ${d.name}\nTelegram: ${user.username?'@'+user.username:'username не указан'}; ID: ${user.id}\nАдрес: ${d.address}\nEmail: ${d.email}\n\n${d.lines}\n\nТовары: ${d.total} ₽${promo.discount?`\nПромокод ${promo.code}: −${promo.discount} ₽`:''}\nСписано с баланса: ${paidTotal} ₽\nНаличие и доставку подтвердите покупателю.`;
+      if (adminText.length>4000) throw Error('order_long');
+      await send(env,env.ADMIN_CHAT_ID,adminText,{reply_markup:statusButtons(d.order_id)});
+    } catch (e) { if (reserved.length) await env.DB.batch(reserved.map(([name,qty])=>env.DB.prepare('UPDATE inventory SET stock=stock+?,updated_at=? WHERE name=?').bind(qty,Date.now(),name))); if (debited) await creditBalance(env,user.id,paidTotal); await releasePromo(env,promo.code);
+      if (['promo_invalid','promo_min','insufficient_balance','out_of_stock','order_long'].includes(e?.message)) {
+        await env.DB.prepare("UPDATE orders SET state='cancelled' WHERE user_id=? AND order_id=?").bind(user.id,d.order_id).run();
+        const message=e.message==='insufficient_balance'?'Недостаточно средств на балансе. Заказ не оформлен. Обратитесь к администратору для пополнения.':e.message==='out_of_stock'?'Один из товаров уже закончился. Заказ не оформлен — обновите магазин и выберите другой товар.':e.message==='order_long'?'Заказ слишком длинный. Разделите его на несколько заказов.':promoErrorText(e.message);
+        await send(env,m.chat.id,`❌ ${message}`,{reply_markup:keyboard}); return;
+      }
+      await env.DB.prepare("UPDATE orders SET state='pending' WHERE user_id=? AND order_id=?").bind(user.id,d.order_id).run(); throw e;
     }
     await env.DB.prepare("UPDATE orders SET state='sent' WHERE user_id=? AND order_id=?").bind(user.id,d.order_id).run();
+    row.notified=0; row.paidTotal=paidTotal; row.promo=promo;
   }
   if (!row.notified) {
-    await send(env,m.chat.id,`✅ Заказ № ${d.order_id} передан администратору.\nСумма: ${d.total} ₽\nАдрес: ${d.address}\nОжидайте подтверждения наличия и доставки. Корзину можно очистить в настройках магазина.`,{reply_markup:keyboard});
+    const remaining=await balanceFor(env,user.id); const promoLine=row.promo?.discount?`\nПромокод ${row.promo.code}: −${row.promo.discount} ₽`:'';
+    await send(env,m.chat.id,`✅ Заказ № ${d.order_id} передан администратору.\nСписано с баланса: ${(row.paidTotal??d.total).toLocaleString('ru-RU')} ₽${promoLine}\nОстаток: ${remaining.toLocaleString('ru-RU')} ₽\nАдрес: ${d.address}\nОжидайте подтверждения наличия и доставки.`,{reply_markup:keyboard});
     await env.DB.prepare('UPDATE orders SET notified=1 WHERE user_id=? AND order_id=?').bind(user.id,d.order_id).run();
   }
 }
@@ -304,8 +383,13 @@ export default {
         return new Response('Webhook repaired: message and callback_query enabled.');
       } catch { return new Response('Webhook repair failed.',{status:503}); }
     }
-    if (request.method==='OPTIONS' && path==='/inventory') return new Response(null,{headers:corsHeaders});
+    if (request.method==='OPTIONS' && (path==='/inventory' || path==='/account')) return new Response(null,{headers:corsHeaders});
     if (request.method==='GET' && path==='/inventory') { if (!env.DB) return new Response('Not configured',{status:503,headers:corsHeaders}); return Response.json(await inventory(env),{headers:corsHeaders}); }
+    if (request.method==='POST' && path==='/account') {
+      if (!env.DB || !env.BOT_TOKEN) return new Response('Not configured',{status:503,headers:corsHeaders});
+      try { const raw=await request.text(); if (new TextEncoder().encode(raw).length>10000) throw Error('payload'); const user=await webAppUser(JSON.parse(raw).init_data,env); return Response.json({balance:await balanceFor(env,user.id)},{headers:corsHeaders}); }
+      catch { return new Response('Forbidden',{status:403,headers:corsHeaders}); }
+    }
     if (request.method==='GET' && path==='/') return new Response('Telegram shop webhook.');
     if (request.method!=='POST' || path!=='/telegram') return new Response('Not found',{status:404});
     if (!env.WEBHOOK_SECRET || request.headers.get('X-Telegram-Bot-Api-Secret-Token')!==env.WEBHOOK_SECRET) return new Response('Forbidden',{status:403});

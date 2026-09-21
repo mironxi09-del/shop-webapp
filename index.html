@@ -280,6 +280,10 @@
         }
         .cart-actions .checkout { background: var(--primary); color: #fff; }
         .cart-actions .close-cart { background: var(--border); color: var(--text); }
+        .balance-card { margin: 0 0 14px; padding: 13px 14px; display:flex; align-items:center; justify-content:space-between; gap:12px; border:1px solid var(--border); border-radius:16px; background:var(--card-bg); box-shadow:var(--shadow); }
+        .balance-card small { display:block; margin-top:2px; color:var(--text-secondary); }
+        .balance-amount { font-size:18px; font-weight:800; white-space:nowrap; }
+        .balance-note { margin:10px 0 0; color:var(--text-secondary); font-size:12px; line-height:1.45; }
 
         .order-form {
             display: none;
@@ -517,6 +521,10 @@
                 <button id="favoritesFilter" class="secondary-btn" aria-pressed="false">♡ Избранное</button>
             </div>
         </div>
+        <div class="balance-card" id="balanceCard" aria-live="polite">
+            <div><b>💳 Баланс</b><small id="balanceHint">Загружаем баланс…</small></div>
+            <div class="balance-amount" id="balanceAmount">—</div>
+        </div>
         <div id="catalogContainer">
             <div class="categories" id="categories"></div>
             <div id="products-container"></div>
@@ -586,6 +594,9 @@
             <textarea id="addressInput" maxlength="500" rows="3" placeholder="Город, улица, дом, квартира"></textarea>
             <label for="emailInput">Email</label>
             <input type="email" id="emailInput" maxlength="120" placeholder="example@mail.com" />
+            <label for="promoInput">Промокод</label>
+            <input type="text" id="promoInput" maxlength="24" autocapitalize="characters" placeholder="Например, WELCOME" />
+            <p class="balance-note">Оплата заказа списывается с баланса. Промокод проверяется при оформлении; итоговую сумму и остаток пришлёт бот.</p>
             <div class="form-actions">
                 <button class="cancel" id="cancelOrderForm">Отмена</button>
                 <button class="submit" id="submitOrder">✅ Оформить</button>
@@ -606,6 +617,24 @@
         };
         const user = tg?.initDataUnsafe?.user || {};
         const defaultName = user.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : '';
+        const API_URL = 'https://shop-telegram-bot.mironxi09.workers.dev';
+        let accountBalance = null;
+
+        function showBalance(value, hint) {
+            accountBalance = Number.isInteger(value) && value >= 0 ? value : null;
+            document.getElementById('balanceAmount').textContent = accountBalance === null ? '—' : `${accountBalance.toLocaleString('ru-RU')} ₽`;
+            document.getElementById('balanceHint').textContent = hint || (accountBalance === null ? 'Откройте магазин из бота' : 'Доступно для оплаты заказов');
+        }
+        async function loadBalance() {
+            const initData = tg?.initData;
+            if (!initData || typeof fetch !== 'function') { showBalance(null, 'Откройте магазин из личного чата бота'); return; }
+            try {
+                const response = await fetch(`${API_URL}/account`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({init_data:initData})});
+                if (!response.ok) throw Error('account');
+                const data = await response.json();
+                showBalance(data.balance, 'Доступно для оплаты заказов');
+            } catch { showBalance(null, 'Не удалось загрузить баланс. Попробуйте открыть приложение снова.'); }
+        }
 
         // ===== НАСТРОЙКИ =====
         let settings = {
@@ -751,7 +780,7 @@
         let exclusiveStock = {};
         productMap.forEach(item => { exclusiveStock[item.name] = Math.max(0, (item.stock ?? 99) - cart.filter(x => x.name === item.name).reduce((n,x) => n + x.qty, 0)); });
 
-        const INVENTORY_URL = 'https://shop-telegram-bot.mironxi09.workers.dev/inventory';
+        const INVENTORY_URL = `${API_URL}/inventory`;
         async function loadGlobalInventory() {
             if (typeof fetch !== 'function') return;
             try {
@@ -1020,12 +1049,13 @@
             const name = document.getElementById('nameInput').value.trim();
             const address = document.getElementById('addressInput').value.trim();
             const email = document.getElementById('emailInput').value.trim();
+            const promoCode = document.getElementById('promoInput').value.trim().toUpperCase();
             if (!cart.length) return fail('Корзина пуста. Добавьте товары.');
             if (!name || name.length > 100 || address.length < 5 || address.length > 500 || email.length > 120 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
                 return fail('Укажите имя, полный адрес (5–500 символов) и корректный email.');
             if (!tg || tg.platform === 'unknown' || tg.initDataUnsafe?.query_id || tg.initDataUnsafe?.start_param)
                 return fail('Откройте магазин кнопкой клавиатуры под полем ввода в личном чате бота после /start.');
-            const data = JSON.stringify({version: 1, order_id: crypto.randomUUID(), name, address, email,
+            const data = JSON.stringify({version: 2, order_id: crypto.randomUUID(), name, address, email, promo_code: promoCode,
                 items: cart.map(({name, size, qty}) => ({name, size, qty}))});
             if (new TextEncoder().encode(data).length > 4096) return fail('Заказ слишком большой. Разделите его на несколько заказов.');
             sending = true;
@@ -1037,7 +1067,9 @@
                 document.getElementById('orderForm').style.display = 'none';
                 document.getElementById('addressInput').value = '';
                 document.getElementById('emailInput').value = '';
-                fail('✅ Заказ передан Telegram. Корзина очищена. Дождитесь подтверждения бота в чате.');
+                document.getElementById('promoInput').value = '';
+                showBalance(null, 'Баланс обновится после подтверждения заказа ботом');
+                fail('✅ Заказ передан Telegram. Корзина очищена. Бот проверит промокод и наличие средств, затем пришлёт результат.');
             } catch {
                 sending = false;
                 this.disabled = false;
@@ -1069,6 +1101,8 @@
             setToggle('motionToggle','reducedMotion',false); setToggle('hapticToggle','haptic',true);
             haptic('medium');
         });
+
+        loadBalance();
 
         // ===== ИНИЦИАЛИЗАЦИЯ =====
         renderCatalog('catalogContainer', 'categories', 'products-container', catalog, false);
