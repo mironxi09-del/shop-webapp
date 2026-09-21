@@ -307,12 +307,13 @@ async function processUpdate(update,env) {
     return;
   }
   if (m.text==='❓ Помощь' || /^\/help(?:@\w+)?$/.test(m.text||'')) {
-    await send(env,m.chat.id,'🛍 Как заказать\nОткройте магазин, выберите размер и товары, затем укажите адрес и промокод при оформлении. Заказ оплачивается с баланса.\n\n💳 /balance — ваш баланс.\n📦 /myorders — ваши последние заказы и статусы.\n📍 /address — адрес последнего заказа.\n\nСтатусы: Новый → В работе → В доставке → Завершён. Изменения статуса приходят сюда автоматически.'+(isAdmin(env,user.id)?'\n\n⚙️ Администратору\n/admin — остатки\n/orders — все последние заказы\n/stats — статистика\n/promos — промокоды\n/promo add CODE percent 10 50 30 1000 — создать: код, тип скидки, размер, активации, дни, минимум заказа\n/promo disable CODE — выключить\n/balance ID СУММА — зачислить баланс пользователю':''),{reply_markup:keyboard});
+    await send(env,m.chat.id,'🛍 Как заказать\nОткройте магазин, выберите размер и товары, затем укажите адрес и промокод при оформлении. Заказ оплачивается с баланса.\n\n💳 /balance — ваш баланс.\n🪪 /id — ваш Telegram ID для первого пополнения.\n📦 /myorders — ваши последние заказы и статусы.\n📍 /address — адрес последнего заказа.\n\nСтатусы: Новый → В работе → В доставке → Завершён. Изменения статуса приходят сюда автоматически.'+(isAdmin(env,user.id)?'\n\n⚙️ Администратору\n/admin — остатки\n/orders — все последние заказы\n/stats — статистика\n/promos — промокоды\n/promo add CODE percent 10 50 30 1000 — создать: код, тип скидки, размер, активации, дни, минимум заказа\n/promo disable CODE — выключить\n/balance ID СУММА — зачислить баланс пользователю':''),{reply_markup:keyboard});
     return;
   }
   if (/^\/(stock|admin)(?:@\w+)?$/.test(m.text||'') || m.text==='⚙️ Админ-панель') { if (isAdmin(env,user.id)) await showStockPanel(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
   if (/^\/orders(?:@\w+)?$/.test(m.text||'')) { if (isAdmin(env,user.id)) await showOrders(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
   if (/^\/stats(?:@\w+)?$/.test(m.text||'')) { if (!isAdmin(env,user.id)) return; const rows=(await env.DB.prepare('SELECT state,COUNT(*) AS n FROM orders GROUP BY state').all()).results||[]; await send(env,m.chat.id,'<b>Статистика заказов</b>\n'+Object.entries(statuses).map(([k,v])=>`${v}: ${rows.find(x=>x.state===k)?.n||0}`).join('\n'),{parse_mode:'HTML'}); return; }
+  if (/^\/id(?:@\w+)?$/.test(m.text||'')) { await send(env,m.chat.id,`🪪 Ваш Telegram ID: <code>${user.id}</code>\nПередайте его администратору, если нужно первое зачисление баланса.`,{parse_mode:'HTML',reply_markup:keyboard}); return; }
   if (/^\/balance(?:@\w+)?(?:\s|$)/.test(m.text||'')) {
     const args=(m.text||'').replace(/^\/balance(?:@\w+)?\s*/,'').trim().split(/\s+/).filter(Boolean);
     if (isAdmin(env,user.id) && args.length===2 && /^\d+$/.test(args[0]) && /^\d+$/.test(args[1])) {
