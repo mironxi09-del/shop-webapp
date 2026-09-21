@@ -212,6 +212,51 @@ async function webAppUser(initData,env) {
   if (signature!==hash) throw Error('init_data');
   const user=JSON.parse(params.get('user')||'{}'); if (!Number.isSafeInteger(user?.id)) throw Error('init_data'); return user;
 }
+// Short-lived, signed launch credentials are delivered only in the user's private bot chat.
+async function launchKey(env) {
+  return crypto.subtle.importKey('raw',new TextEncoder().encode(env.BOT_TOKEN),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);
+}
+export async function launchToken(env,userId) {
+  const payload=`${userId}.${Math.floor(Date.now()/1000)+3600}.${crypto.randomUUID()}`;
+  const signature=await crypto.subtle.sign('HMAC',await launchKey(env),new TextEncoder().encode('shop-launch:'+payload));
+  return payload+'.'+[...new Uint8Array(signature)].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+async function authenticateApp(data,env) {
+  if (data.init_data) return webAppUser(data.init_data,env);
+  if (typeof data.access_token!=='string' || data.access_token.length>200) throw Error('auth');
+  const match=/^(\d+)\.(\d+)\.([0-9a-f-]{36})\.([0-9a-f]{64})$/.exec(data.access_token);
+  if (!match || !Number.isSafeInteger(Number(match[1])) || Number(match[1])<1 || Number(match[2])<Date.now()/1000 || Number(match[2])>Date.now()/1000+3601) throw Error('auth');
+  const signature=Uint8Array.from(match[4].match(/../g),x=>parseInt(x,16));
+  if (!await crypto.subtle.verify('HMAC',await launchKey(env),signature,new TextEncoder().encode(`shop-launch:${match[1]}.${match[2]}.${match[3]}`))) throw Error('auth');
+  return {id:Number(match[1])};
+}
+async function adminApi(path,data,env) {
+  await ensureCommerce(env);
+  if (path==='/admin/data') {
+    const promos=(await env.DB.prepare('SELECT * FROM promo_codes ORDER BY created_at DESC LIMIT 200').all()).results||[];
+    return {promos,inventory:await inventory(env)};
+  }
+  if (path==='/admin/promos/create') {
+    const p=data.promo||{}, code=String(p.code||'').trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{3,24}$/.test(code) || !['percent','fixed'].includes(p.type) || !Number.isSafeInteger(p.value) || p.value<1 || p.value>(p.type==='percent'?100:100000000) || !Number.isSafeInteger(p.uses) || p.uses<1 || p.uses>100000 || !Number.isSafeInteger(p.minimum) || p.minimum<0 || p.minimum>100000000 || !Number.isSafeInteger(p.expires) || p.expires<0 || (p.expires!==0 && (p.expires<=Date.now() || p.expires>Date.now()+3650*86400000))) throw Error('Проверьте размер скидки, лимит и срок действия.');
+    const result=await env.DB.prepare('INSERT OR IGNORE INTO promo_codes (code,discount_type,discount_value,max_activations,used_count,valid_until,min_order_total,active,created_at) VALUES (?,?,?,?,0,?,?,1,?)').bind(code,p.type,p.value,p.uses,p.expires,p.minimum,Date.now()).run();
+    if (!result.meta.changes) throw Error('Такой код уже существует. Выберите другое название.');
+    return {message:'Промокод '+code+' создан.'};
+  }
+  if (path==='/admin/promos/toggle') {
+    if (!/^[A-Z0-9_-]{3,24}$/.test(data.code||'') || typeof data.active!=='boolean') throw Error('Некорректный промокод.');
+    const result=await env.DB.prepare('UPDATE promo_codes SET active=? WHERE code=?').bind(data.active?1:0,data.code).run();
+    if (!result.meta.changes) throw Error('Промокод не найден.');
+    return {message:data.active?'Промокод включён.':'Промокод отключён.'};
+  }
+  if (path==='/admin/stock') {
+    if (!Object.hasOwn(CATALOG,data.name||'') || !Number.isSafeInteger(data.stock) || data.stock<0 || data.stock>100000 || !Number.isSafeInteger(data.previous)) throw Error('Укажите остаток от 0 до 100 000.');
+    const result=await env.DB.prepare('UPDATE inventory SET stock=?,updated_at=? WHERE name=? AND stock=?').bind(data.stock,Date.now(),data.name,data.previous).run();
+    if (!result.meta.changes) throw Error('Остаток уже изменился. Обновите панель перед сохранением.');
+    return {message:'Остаток сохранён.'};
+  }
+  throw Error('Неизвестное действие.');
+}
 async function reserveStock(env,d) { const totals=new Map(); for (const item of d.items) totals.set(item.name,(totals.get(item.name)||0)+item.qty); if (!totals.size) return []; await ensureInventory(env); const reserved=[]; try { for (const [name,qty] of totals) { const result=await env.DB.prepare('UPDATE inventory SET stock=stock-?,updated_at=? WHERE name=? AND stock>=?').bind(qty,Date.now(),name,qty).run(); if (!result.meta.changes) throw Error('out_of_stock'); reserved.push([name,qty]); } return reserved; } catch (error) { await env.DB.batch(reserved.map(([name,qty])=>env.DB.prepare('UPDATE inventory SET stock=stock+?,updated_at=? WHERE name=?').bind(qty,Date.now(),name))); throw error; } }
 async function changeStock(env,index,delta) { const item=INVENTORY_PRODUCTS[index]; if (!item || !Number.isInteger(delta) || ![-1,1].includes(delta)) throw Error('stock_action'); await ensureInventory(env); const sql=delta>0?'UPDATE inventory SET stock=stock+1,updated_at=? WHERE name=?':'UPDATE inventory SET stock=stock-1,updated_at=? WHERE name=? AND stock>0'; const result=await env.DB.prepare(sql).bind(Date.now(),item.name).run(); if (!result.meta.changes && delta<0) throw Error('stock_empty'); }
 async function stockPanel(env,page=0) {
@@ -256,7 +301,15 @@ async function telegram(env, method, body) {
   if (!result.ok) throw Error('telegram_'+(result.error_code||response.status));
   return result.result;
 }
-const send=(env,chat_id,text,extra={})=>telegram(env,'sendMessage',{chat_id,text,...extra});
+async function send(env,chat_id,text,extra={}) {
+  if (extra.reply_markup===keyboard) {
+    const personal=structuredClone(keyboard);
+    personal.keyboard[0][0].web_app.url=WEBAPP_URL+'#access_token='+await launchToken(env,Number(chat_id));
+    if (!isAdmin(env,chat_id)) personal.keyboard[2]=[{text:'📍 Мой адрес'}];
+    extra={...extra,reply_markup:personal};
+  }
+  return telegram(env,'sendMessage',{chat_id,text,...extra});
+}
 
 async function showOrders(env,chat) {
   const rows=(await env.DB.prepare('SELECT order_id,state,address,created_at FROM orders ORDER BY created_at DESC LIMIT 20').all()).results||[];
@@ -318,7 +371,11 @@ async function processUpdate(update,env) {
     await send(env,m.chat.id,'🛍 Как заказать\nОткройте магазин, выберите размер и товары, затем укажите адрес и промокод при оформлении. Заказ оплачивается с баланса.\n\n💳 /balance — ваш баланс.\n🪪 /id — ваш Telegram ID для первого пополнения.\n📦 /myorders — ваши последние заказы и статусы.\n📍 /address — адрес последнего заказа.\n\nСтатусы: Новый → В работе → В доставке → Завершён. Изменения статуса приходят сюда автоматически.'+(isAdmin(env,user.id)?'\n\n⚙️ Администратору\n/admin — остатки\n/orders — все последние заказы\n/stats — статистика\n/promos — промокоды\n/promo add CODE percent 10 50 30 1000 — создать: код, тип скидки, размер, активации, дни, минимум заказа\n/promo disable CODE — выключить\n/balance ID СУММА — зачислить баланс пользователю':''),{reply_markup:keyboard});
     return;
   }
-  if (/^\/(stock|admin)(?:@\w+)?$/.test(m.text||'') || m.text==='⚙️ Админ-панель') { if (isAdmin(env,user.id)) await showStockPanel(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
+  if (/^\/admin(?:@\w+)?$/.test(m.text||'') || m.text==='⚙️ Админ-панель') {
+    if (isAdmin(env,user.id)) await send(env,m.chat.id,'Панель доступна в магазине: нажмите «Открыть магазин», затем «Управление» под шапкой. Ссылка входа действует один час. /stock — остатки в чате.',{reply_markup:keyboard});
+    else await send(env,m.chat.id,'Эта команда доступна администратору.'); return;
+  }
+  if (/^\/stock(?:@\w+)?$/.test(m.text||'')) { if (isAdmin(env,user.id)) await showStockPanel(env,m.chat.id); return; }
   if (/^\/orders(?:@\w+)?$/.test(m.text||'')) { if (isAdmin(env,user.id)) await showOrders(env,m.chat.id); else await send(env,m.chat.id,'Эта команда доступна администратору.'); return; }
   if (/^\/stats(?:@\w+)?$/.test(m.text||'')) { if (!isAdmin(env,user.id)) return; const rows=(await env.DB.prepare('SELECT state,COUNT(*) AS n FROM orders GROUP BY state').all()).results||[]; await send(env,m.chat.id,'<b>Статистика заказов</b>\n'+Object.entries(statuses).map(([k,v])=>`${v}: ${rows.find(x=>x.state===k)?.n||0}`).join('\n'),{parse_mode:'HTML'}); return; }
   if (/^\/id(?:@\w+)?$/.test(m.text||'')) { await send(env,m.chat.id,`🪪 Ваш Telegram ID: <code>${user.id}</code>\nПередайте его администратору, если нужно первое зачисление баланса.`,{parse_mode:'HTML',reply_markup:keyboard}); return; }
@@ -392,16 +449,25 @@ export default {
         return new Response('Webhook repaired: message and callback_query enabled.');
       } catch { return new Response('Webhook repair failed.',{status:503}); }
     }
-    if (request.method==='OPTIONS' && (path==='/inventory' || path==='/account' || path==='/promo-preview')) return new Response(null,{headers:corsHeaders});
+    if (request.method==='OPTIONS' && (path==='/inventory' || path==='/account' || path==='/promo-preview' || path.startsWith('/admin/'))) return new Response(null,{headers:corsHeaders});
+    if (request.method==='POST' && path.startsWith('/admin/')) {
+      if (!env.DB || !env.BOT_TOKEN) return Response.json({message:'Сервис временно недоступен.'},{status:503,headers:corsHeaders});
+      let data,user;
+      try { const raw=await request.text(); if (new TextEncoder().encode(raw).length>16000) throw Error('size'); data=JSON.parse(raw); user=await authenticateApp(data,env); }
+      catch { return Response.json({message:'Вход устарел. Отправьте /start боту и откройте магазин заново.'},{status:401,headers:corsHeaders}); }
+      if (!isAdmin(env,user.id)) return Response.json({message:'Доступ только для администратора.'},{status:403,headers:corsHeaders});
+      try { return Response.json(await adminApi(path,data,env),{headers:corsHeaders}); }
+      catch(error) { const message= /^[А-ЯЁ]/.test(error.message||'')?error.message:'Не удалось сохранить изменения. Попробуйте снова.'; return Response.json({message},{status:400,headers:corsHeaders}); }
+    }
     if (request.method==='GET' && path==='/inventory') { if (!env.DB) return new Response('Not configured',{status:503,headers:corsHeaders}); return Response.json(await inventory(env),{headers:corsHeaders}); }
     if (request.method==='POST' && path==='/account') {
       if (!env.DB || !env.BOT_TOKEN) return new Response('Not configured',{status:503,headers:corsHeaders});
-      try { const raw=await request.text(); if (new TextEncoder().encode(raw).length>10000) throw Error('payload'); const user=await webAppUser(JSON.parse(raw).init_data,env); return Response.json({balance:await balanceFor(env,user.id)},{headers:corsHeaders}); }
+      try { const raw=await request.text(); if (new TextEncoder().encode(raw).length>10000) throw Error('payload'); const user=await authenticateApp(JSON.parse(raw),env); return Response.json({balance:await balanceFor(env,user.id),is_admin:isAdmin(env,user.id)},{headers:corsHeaders}); }
       catch { return new Response('Forbidden',{status:403,headers:corsHeaders}); }
     }
     if (request.method==='POST' && path==='/promo-preview') {
       if (!env.DB || !env.BOT_TOKEN) return new Response('Not configured',{status:503,headers:corsHeaders});
-      try { const raw=await request.text(); if (new TextEncoder().encode(raw).length>10000) throw Error('payload'); const data=JSON.parse(raw); await webAppUser(data.init_data,env); const result=await previewPromo(env,data.code,data.total); return Response.json(result,{status:result.valid?200:400,headers:corsHeaders}); }
+      try { const raw=await request.text(); if (new TextEncoder().encode(raw).length>10000) throw Error('payload'); const data=JSON.parse(raw); await authenticateApp(data,env); const result=await previewPromo(env,data.code,data.total); return Response.json(result,{status:result.valid?200:400,headers:corsHeaders}); }
       catch { return Response.json({valid:false,message:'Не удалось проверить промокод.'},{status:400,headers:corsHeaders}); }
     }
     if (request.method==='GET' && path==='/') return new Response('Telegram shop webhook.');

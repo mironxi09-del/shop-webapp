@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
     <title>Магазин одежды</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
@@ -444,6 +445,32 @@
             font-size: calc(var(--font-size) * 0.85);
         }
         @media (max-width: 400px) { .products { grid-template-columns: 1fr 1fr; } }
+      [hidden] { display:none!important; }
+      .account-tools { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; font-size:12px; color:var(--text-secondary); }
+      .account-tools button { padding:8px 12px; }
+      .admin-panel { background:var(--card-bg); border:1px solid var(--border); border-radius:20px; padding:18px; margin-bottom:16px; }
+      .admin-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+      .admin-heading h2 { font-size:21px; }
+      .admin-tabs { display:flex; gap:8px; margin:16px 0; }
+      .admin-tabs button { flex:1; padding:10px; }
+      .admin-tabs button[aria-selected="true"] { background:var(--primary);color:#fff; }
+      .admin-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+      .admin-grid label { font-size:13px; font-weight:600; }
+      .admin-grid input,.admin-grid select,.admin-stock input { display:block; width:100%; min-width:0; padding:11px; margin-top:6px; border:1px solid var(--border);border-radius:10px; background:var(--card-bg);color:var(--text); }
+      .admin-wide { grid-column:1/-1; }
+      .admin-note { font-size:12px; color:var(--text-secondary); line-height:1.5; margin:10px 0; }
+      .admin-primary { width:100%; margin:14px 0; border:0;border-radius:12px;padding:13px;background:var(--primary-gradient);color:white;font-weight:700; }
+      .admin-promo,.admin-stock { padding:14px 0; border-top:1px solid var(--border); }
+      .admin-promo strong { display:block;overflow-wrap:anywhere; }
+      .admin-promo button { padding:8px 12px; }
+      .admin-stock div { display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px; }
+      .admin-stock button { padding:10px; }
+      .admin-message { margin:10px 0;line-height:1.5;font-size:13px; }
+      .header { column-gap:8px; }
+      .header h1 { text-align:center;font-size:clamp(17px,4.7vw,28px); }
+      .header-actions { gap:5px; }
+      .header .theme-toggle { width:34px;min-width:34px; }
+      .header-balance b { white-space:normal;overflow-wrap:anywhere; }
     </style>
     <style>
       /* Светлый интерфейс магазина: адаптирован для небольшого окна Telegram. */
@@ -521,6 +548,34 @@
             </div>
         </div>
 
+        <div class="account-tools">
+            <span id="accountStatus" role="status">Загружаем баланс…</span>
+            <button class="secondary-btn" id="refreshBalance">↻ Баланс</button>
+            <button class="secondary-btn" id="adminOpen" hidden>⚙ Управление</button>
+        </div>
+        <section class="admin-panel" id="adminPanel" hidden aria-label="Управление магазином">
+            <div class="admin-heading"><h2>Управление магазином</h2><button class="secondary-btn" id="adminClose">Закрыть</button></div>
+            <p class="admin-note">Доступ подтверждён через личный чат администратора.</p>
+            <div class="admin-tabs"><button class="secondary-btn" id="adminPromosTab" aria-selected="true">Промокоды</button><button class="secondary-btn" id="adminStockTab" aria-selected="false">Остатки</button></div>
+            <p class="admin-message" id="adminMessage" role="status" aria-live="polite"></p>
+            <div id="adminPromosView">
+                <form id="promoCreateForm">
+                    <div class="admin-grid">
+                        <label class="admin-wide">Код<input id="adminCode" required maxlength="24" pattern="[A-Za-z0-9_-]{3,24}" placeholder="WELCOME10" autocomplete="off"></label>
+                        <label>Тип скидки<select id="adminDiscountType"><option value="percent">Проценты (%)</option><option value="fixed">Рубли (₽)</option></select></label>
+                        <label>Размер скидки<input id="adminDiscountValue" required type="number" min="1" max="100" step="1" value="10"></label>
+                        <label>Всего активаций<input id="adminUses" required type="number" min="1" max="100000" step="1" value="50"></label>
+                        <label>Заказ от, ₽<input id="adminMinimum" required type="number" min="0" max="100000000" step="1" value="0"></label>
+                        <label class="admin-wide">Действует до<input id="adminExpires" type="datetime-local"></label>
+                    </div>
+                    <p class="admin-note">Латинские буквы, цифры, дефис и подчёркивание. Пустая дата — без срока. Время указано по часам вашего устройства.</p>
+                    <button class="admin-primary" id="adminCreate" type="submit">Создать промокод</button>
+                </form>
+                <div class="admin-heading"><h3>Ваши промокоды</h3><button class="secondary-btn" id="adminRefresh">↻ Обновить</button></div>
+                <div id="adminPromoList"></div>
+            </div>
+            <div id="adminStockView" hidden><p class="admin-note">Укажите фактическое количество товара. Ноль — нет в наличии.</p><input id="adminStockSearch" type="search" placeholder="Найти товар" aria-label="Поиск по остаткам"><div id="adminStockList"></div></div>
+        </section>
         <div class="tabs">
             <button class="tab active" data-tab="catalog">📦 Каталог</button>
             <button class="tab" data-tab="exclusive">⭐ Эксклюзив</button>
@@ -634,22 +689,37 @@
         const defaultName = user.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : '';
         const API_URL = 'https://shop-telegram-bot.mironxi09.workers.dev';
         let accountBalance = null;
+        let adminAllowed=false;
+        const accessToken=new URLSearchParams(window.location?.hash?.slice(1)||'').get('access_token')||'';
+        const appAuth=()=>({init_data:tg?.initData||'',access_token:accessToken});
+        const hasAppAuth=()=>Boolean(tg?.initData||accessToken);
+        async function appRequest(path,body={}) {
+            const response=await fetch(API_URL+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,...appAuth()})});
+            const data=await response.json().catch(()=>({message:'Не удалось выполнить запрос.'}));
+            if(!response.ok) {
+                if(response.status===401||response.status===403) { adminAllowed=false; document.getElementById('adminOpen').hidden=true; document.getElementById('adminPanel').hidden=true; }
+                throw Error(response.status===401||response.status===403?'Отправьте /start боту и откройте магазин новой кнопкой.':data.message||'Не удалось выполнить запрос.');
+            }
+            return data;
+        }
 
         function showBalance(value, hint) {
             accountBalance = Number.isInteger(value) && value >= 0 ? value : null;
             document.getElementById('balanceAmount').textContent = accountBalance === null ? '—' : `${accountBalance.toLocaleString('ru-RU')} ₽`;
             document.getElementById('balanceHint').textContent = hint || (accountBalance === null ? 'Откройте магазин из бота' : 'Доступно для оплаты заказов');
+            document.getElementById('accountStatus').textContent = hint || 'Баланс обновлён';
         }
         async function loadBalance() {
-            const initData = tg?.initData;
-            if (!initData || typeof fetch !== 'function') { showBalance(null, 'Откройте магазин из личного чата бота'); return; }
+            if (!hasAppAuth() || typeof fetch !== 'function') { showBalance(null, 'Для входа отправьте /start боту и откройте магазин новой кнопкой.'); return; }
+            const refresh=document.getElementById('refreshBalance'); refresh.disabled=true;
             try {
-                const response = await fetch(`${API_URL}/account`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({init_data:initData})});
-                if (!response.ok) throw Error('account');
-                const data = await response.json();
+                const data = await appRequest('/account');
                 showBalance(data.balance, 'Доступно для оплаты заказов');
-            } catch { showBalance(null, 'Не удалось загрузить баланс. Попробуйте открыть приложение снова.'); }
+                adminAllowed=data.is_admin===true; document.getElementById('adminOpen').hidden=!adminAllowed;
+            } catch(error) { showBalance(null, error.message||'Не удалось загрузить баланс.'); }
+            finally { refresh.disabled=false; }
         }
+        document.getElementById('refreshBalance').addEventListener('click',loadBalance);
         const rubles = value => `${Math.max(0, Number(value) || 0).toLocaleString('ru-RU')} ₽`;
         const cartTotalAmount = () => cart.reduce((sum,item) => sum + Number(String(item.price).replace(/[^\d]/g,''))*item.qty, 0);
         let promoPreviewTimer, promoPreviewRequest = 0;
@@ -661,12 +731,13 @@
             const notice=document.getElementById('promoStatus'); notice.textContent=status; notice.className=`promo-status ${state}`;
         }
         async function previewPromo() {
+            const requestId=++promoPreviewRequest;
             const total=cartTotalAmount(); const code=document.getElementById('promoInput').value.trim().toUpperCase();
             if (!code) { setOrderPricing(total,0,'Введите промокод, чтобы увидеть скидку.'); return; }
-            const requestId=++promoPreviewRequest; setOrderPricing(total,0,'Проверяем промокод…');
-            if (!tg?.initData || typeof fetch!=='function') { setOrderPricing(total,0,'Промокод будет проверен ботом при оформлении.'); return; }
+            setOrderPricing(total,0,'Проверяем промокод…');
+            if (!hasAppAuth() || typeof fetch!=='function') { setOrderPricing(total,0,'Для проверки отправьте /start боту и откройте магазин заново.'); return; }
             try {
-                const response=await fetch(`${API_URL}/promo-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({init_data:tg.initData,code,total})});
+                const response=await fetch(`${API_URL}/promo-preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...appAuth(),code,total})});
                 const data=await response.json(); if (requestId!==promoPreviewRequest) return;
                 if (!response.ok || !data.valid) { setOrderPricing(total,0,data.message||'Промокод недействителен.', 'error'); return; }
                 setOrderPricing(total,data.discount,`Промокод ${data.code}: скидка ${rubles(data.discount)}.`, 'ok');
@@ -1078,7 +1149,7 @@
         document.getElementById('cancelOrderForm').addEventListener('click', function() {
             document.getElementById('orderForm').style.display = 'none';
         });
-        document.getElementById('promoInput').addEventListener('input', () => { clearTimeout(promoPreviewTimer); promoPreviewTimer=setTimeout(previewPromo,350); });
+        document.getElementById('promoInput').addEventListener('input', () => { ++promoPreviewRequest; setOrderPricing(cartTotalAmount(),0,'Проверяем промокод…'); clearTimeout(promoPreviewTimer); promoPreviewTimer=setTimeout(previewPromo,350); });
 
         let sending = false;
         document.getElementById('submitOrder').addEventListener('click', function() {
@@ -1141,6 +1212,60 @@
             haptic('medium');
         });
 
+        let adminInventory={};
+        const adminMessage=text=>{ document.getElementById('adminMessage').textContent=text; };
+        function adminNode(tag,text,className='') { const node=document.createElement(tag); node.textContent=text; node.className=className; return node; }
+        async function adminAction(button,path,body) {
+            if(!adminAllowed) return;
+            button.disabled=true;
+            try { const data=await appRequest(path,body); await loadAdmin(); adminMessage(data.message); }
+            catch(error) { adminMessage(error.message); }
+            finally { button.disabled=false; }
+        }
+        function renderAdminStocks() {
+            const list=document.getElementById('adminStockList'); list.replaceChildren();
+            const query=document.getElementById('adminStockSearch').value.trim().toLocaleLowerCase('ru');
+            Object.entries(adminInventory).filter(([name])=>name.toLocaleLowerCase('ru').includes(query)).forEach(([name,stock])=>{
+                const row=adminNode('section','','admin-stock'); row.appendChild(adminNode('strong',name));
+                const line=document.createElement('div'), input=document.createElement('input'); input.type='number';input.min='0';input.max='100000';input.step='1';input.value=stock;input.setAttribute('aria-label','Остаток: '+name);
+                const save=adminNode('button','Сохранить','secondary-btn');save.addEventListener('click',()=>adminAction(save,'/admin/stock',{name,stock:Number(input.value),previous:stock}));
+                line.append(input,save);row.appendChild(line);list.appendChild(row);
+            });
+        }
+        async function loadAdmin() {
+            if(!adminAllowed) return;
+            adminMessage('Загружаем данные…');
+            try {
+                const data=await appRequest('/admin/data'); const list=document.getElementById('adminPromoList');list.replaceChildren();
+                if(!data.promos.length) list.appendChild(adminNode('p','Пока нет промокодов. Создайте первый выше.','admin-note'));
+                data.promos.forEach(p=>{
+                    const expired=p.valid_until>0&&p.valid_until<=Date.now();
+                    const status=!p.active?'Отключён':expired?'Срок истёк':p.used_count>=p.max_activations?'Лимит исчерпан':'Активен';
+                    const card=adminNode('section','','admin-promo');card.appendChild(adminNode('strong',p.code+' · '+(p.discount_type==='percent'?p.discount_value+'%':rubles(p.discount_value))));
+                    card.appendChild(adminNode('p',status+' · Использовано '+p.used_count+' из '+p.max_activations+' · Заказ от '+rubles(p.min_order_total),'admin-note'));
+                    card.appendChild(adminNode('p',p.valid_until?'До '+new Date(p.valid_until).toLocaleString('ru-RU'):'Без ограничения по времени','admin-note'));
+                    const toggle=adminNode('button',p.active?'Отключить':'Включить','secondary-btn');toggle.addEventListener('click',()=>adminAction(toggle,'/admin/promos/toggle',{code:p.code,active:!p.active}));card.appendChild(toggle);list.appendChild(card);
+                });
+                adminInventory=data.inventory;renderAdminStocks();adminMessage('Данные обновлены.');
+            } catch(error) { adminMessage(error.message);throw error; }
+        }
+        document.getElementById('adminOpen').addEventListener('click',()=>{if(!adminAllowed)return;document.getElementById('adminPanel').hidden=false;loadAdmin().catch(()=>{});document.getElementById('adminPanel').scrollIntoView({behavior:'smooth'});});
+        document.getElementById('adminClose').addEventListener('click',()=>{document.getElementById('adminPanel').hidden=true;loadGlobalInventory();});
+        document.getElementById('adminRefresh').addEventListener('click',()=>loadAdmin().catch(()=>{}));
+        document.getElementById('adminStockSearch').addEventListener('input',renderAdminStocks);
+        function adminTab(stocks) {
+            document.getElementById('adminStockView').hidden=!stocks;document.getElementById('adminPromosView').hidden=stocks;
+            document.getElementById('adminStockTab').setAttribute('aria-selected',String(stocks));document.getElementById('adminPromosTab').setAttribute('aria-selected',String(!stocks));
+        }
+        document.getElementById('adminStockTab').addEventListener('click',()=>adminTab(true));
+        document.getElementById('adminPromosTab').addEventListener('click',()=>adminTab(false));
+        document.getElementById('adminDiscountType').addEventListener('change',()=>{document.getElementById('adminDiscountValue').max=document.getElementById('adminDiscountType').value==='percent'?'100':'100000000';});
+        document.getElementById('promoCreateForm').addEventListener('submit',async event=>{
+            event.preventDefault(); if(!adminAllowed)return;
+            const read=id=>document.getElementById(id).value;
+            const promo={code:read('adminCode').trim().toUpperCase(),type:read('adminDiscountType'),value:Number(read('adminDiscountValue')),uses:Number(read('adminUses')),minimum:Number(read('adminMinimum')),expires:read('adminExpires')?new Date(read('adminExpires')).getTime():0};
+            await adminAction(document.getElementById('adminCreate'),'/admin/promos/create',{promo});
+        });
         loadBalance();
 
         // ===== ИНИЦИАЛИЗАЦИЯ =====
