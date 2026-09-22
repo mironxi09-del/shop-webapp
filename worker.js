@@ -174,12 +174,30 @@ async function ensureCommerce(env) {
   await ensureInventory(env);
   await env.DB.batch([
     env.DB.prepare('CREATE TABLE IF NOT EXISTS balances (user_id INTEGER PRIMARY KEY, balance INTEGER NOT NULL DEFAULT 0 CHECK(balance>=0), updated_at INTEGER NOT NULL)'),
-    env.DB.prepare('CREATE TABLE IF NOT EXISTS promo_codes (code TEXT PRIMARY KEY, discount_type TEXT NOT NULL CHECK(discount_type IN (\'percent\',\'fixed\')), discount_value INTEGER NOT NULL CHECK(discount_value>0), max_activations INTEGER NOT NULL CHECK(max_activations>0), used_count INTEGER NOT NULL DEFAULT 0 CHECK(used_count>=0), valid_until INTEGER NOT NULL DEFAULT 0, min_order_total INTEGER NOT NULL DEFAULT 0 CHECK(min_order_total>=0), active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)')
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS promo_codes (code TEXT PRIMARY KEY, discount_type TEXT NOT NULL CHECK(discount_type IN (\'percent\',\'fixed\')), discount_value INTEGER NOT NULL CHECK(discount_value>0), max_activations INTEGER NOT NULL CHECK(max_activations>0), used_count INTEGER NOT NULL DEFAULT 0 CHECK(used_count>=0), valid_until INTEGER NOT NULL DEFAULT 0, min_order_total INTEGER NOT NULL DEFAULT 0 CHECK(min_order_total>=0), active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS topup_requests (request_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, username TEXT NOT NULL, email TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount>0), state TEXT NOT NULL CHECK(state IN (\'pending\',\'approved\',\'declined\',\'failed\')), created_at INTEGER NOT NULL, decided_at INTEGER NOT NULL DEFAULT 0)')
   ]);
 }
 async function balanceFor(env,userId) { await ensureCommerce(env); await env.DB.prepare('INSERT OR IGNORE INTO balances (user_id,balance,updated_at) VALUES (?,?,?)').bind(userId,0,Date.now()).run(); return (await env.DB.prepare('SELECT balance FROM balances WHERE user_id=?').bind(userId).first())?.balance||0; }
 async function creditBalance(env,userId,amount) { await ensureCommerce(env); await env.DB.prepare('INSERT OR IGNORE INTO balances (user_id,balance,updated_at) VALUES (?,?,?)').bind(userId,0,Date.now()).run(); await env.DB.prepare('UPDATE balances SET balance=balance+?,updated_at=? WHERE user_id=?').bind(amount,Date.now(),userId).run(); return balanceFor(env,userId); }
 async function debitBalance(env,userId,amount) { await ensureCommerce(env); await env.DB.prepare('INSERT OR IGNORE INTO balances (user_id,balance,updated_at) VALUES (?,?,?)').bind(userId,0,Date.now()).run(); const result=await env.DB.prepare('UPDATE balances SET balance=balance-?,updated_at=? WHERE user_id=? AND balance>=?').bind(amount,Date.now(),userId,amount).run(); return Boolean(result.meta.changes); }
+const topupButtons=id=>({inline_keyboard:[[{text:'✅ Пополнить',callback_data:`topup:${id}:approve`},{text:'❌ Отказать',callback_data:`topup:${id}:decline`}]]});
+function normalizeTopup(data) {
+  const username=String(data.username||'').trim().replace(/^@/,'');
+  const email=String(data.email||'').trim().toLowerCase();
+  const amount=Number(data.amount);
+  if (!/^[A-Za-z0-9_]{5,32}$/.test(username) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !Number.isSafeInteger(amount) || amount<1 || amount>100000000) throw Error('Проверьте юзернейм, email и сумму от 1 до 100 000 000 ₽.');
+  return {username,email,amount};
+}
+async function createTopupRequest(env,userId,data) {
+  await ensureCommerce(env);
+  const request=normalizeTopup(data), requestId=crypto.randomUUID(), now=Date.now();
+  await env.DB.prepare('INSERT INTO topup_requests (request_id,user_id,username,email,amount,state,created_at,decided_at) VALUES (?,?,?,?,?,\'pending\',?,0)').bind(requestId,userId,request.username,request.email,request.amount,now).run();
+  const adminText=`💳 <b>Запрос на пополнение</b>\n\nПользователь: @${request.username}\nTelegram ID: <code>${userId}</code>\nEmail: ${request.email}\nСумма: <b>${request.amount.toLocaleString('ru-RU')} ₽</b>\n\nПосле подтверждения сумма будет зачислена на баланс пользователя.`;
+  try { await send(env,env.ADMIN_CHAT_ID,adminText,{parse_mode:'HTML',reply_markup:topupButtons(requestId)}); }
+  catch (error) { await env.DB.prepare("UPDATE topup_requests SET state='failed',decided_at=? WHERE request_id=?").bind(Date.now(),requestId).run(); throw error; }
+  return request;
+}
 async function redeemPromo(env,code,total) {
   if (!code) return {code:'',discount:0};
   await ensureCommerce(env); const now=Date.now(); const promo=await env.DB.prepare('SELECT * FROM promo_codes WHERE code=?').bind(code).first();
@@ -335,6 +353,34 @@ async function processCallback(q,env) {
   if (!isAdmin(env,q?.from?.id) || !isAdmin(env,q?.message?.chat?.id)) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Доступ только для администратора',show_alert:true});
   const [kind,id,value,page]=(q.data||'').split(':');
   try {
+    if (kind==='topup') {
+      if (!/^[0-9a-f-]{36}$/i.test(id) || !['approve','decline'].includes(value)) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Некорректная кнопка',show_alert:true});
+      const row=await env.DB.prepare('SELECT user_id,username,amount,state FROM topup_requests WHERE request_id=?').bind(id).first();
+      if (!row) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Запрос не найден',show_alert:true});
+      if (row.state!=='pending') return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:row.state==='approved'?'Пополнение уже выполнено.':'Этот запрос уже закрыт.',show_alert:true});
+      if (value==='decline') {
+        const result=await env.DB.prepare("UPDATE topup_requests SET state='declined',decided_at=? WHERE request_id=? AND state='pending'").bind(Date.now(),id).run();
+        if (!result.meta.changes) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Запрос уже обработан.',show_alert:true});
+        await telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Запрос отклонён'});
+        await send(env,q.message.chat.id,`Запрос @${row.username} на ${row.amount.toLocaleString('ru-RU')} ₽ отклонён.`);
+        await send(env,row.user_id,'❌ Запрос на пополнение отклонён администратором.',{reply_markup:keyboard});
+        return;
+      }
+      await ensureCommerce(env);
+      const now=Date.now();
+      const result=await env.DB.batch([
+        env.DB.prepare('INSERT OR IGNORE INTO balances (user_id,balance,updated_at) VALUES (?,?,?)').bind(row.user_id,0,now),
+        env.DB.prepare("UPDATE balances SET balance=balance+?,updated_at=? WHERE user_id=? AND EXISTS (SELECT 1 FROM topup_requests WHERE request_id=? AND state='pending')").bind(row.amount,now,row.user_id,id),
+        env.DB.prepare("UPDATE topup_requests SET state='approved',decided_at=? WHERE request_id=? AND state='pending'").bind(now,id)
+      ]);
+      const credited=result[1]?.meta?.changes;
+      if (!credited) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Запрос уже обработан.',show_alert:true});
+      const balance=await balanceFor(env,row.user_id);
+      await telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Баланс пополнен'});
+      await send(env,q.message.chat.id,`✅ @${row.username}: зачислено ${row.amount.toLocaleString('ru-RU')} ₽. Баланс: ${balance.toLocaleString('ru-RU')} ₽.`);
+      await send(env,row.user_id,`✅ Баланс пополнен на <b>${row.amount.toLocaleString('ru-RU')} ₽</b>.\nТекущий баланс: <b>${balance.toLocaleString('ru-RU')} ₽</b>.`,{parse_mode:'HTML',reply_markup:keyboard});
+      return;
+    }
     if (kind==='stockpage') { const panel=await stockPanel(env,Number(id)); await telegram(env,'editMessageText',{chat_id:q.message.chat.id,message_id:q.message.message_id,text:panel.text,parse_mode:'HTML',reply_markup:panel.reply_markup}); return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId}); }
     if (kind==='stock') { await changeStock(env,Number(id),Number(value)); const panel=await stockPanel(env,Number(page)); await telegram(env,'editMessageText',{chat_id:q.message.chat.id,message_id:q.message.message_id,text:panel.text,parse_mode:'HTML',reply_markup:panel.reply_markup}); return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Остаток обновлён'}); }
     if (kind!=='status' || !statuses[value] || !/^[0-9a-f-]{36}$/i.test(id)) return telegram(env,'answerCallbackQuery',{callback_query_id:callbackId,text:'Некорректная кнопка',show_alert:true});
@@ -368,7 +414,7 @@ async function processUpdate(update,env) {
     return;
   }
   if (m.text==='❓ Помощь' || /^\/help(?:@\w+)?$/.test(m.text||'')) {
-    await send(env,m.chat.id,'🛍 Как заказать\nОткройте магазин, выберите размер и товары, затем укажите адрес и промокод при оформлении. Заказ оплачивается с баланса.\n\n💳 /balance — ваш баланс.\n🪪 /id — ваш Telegram ID для первого пополнения.\n📦 /myorders — ваши последние заказы и статусы.\n📍 /address — адрес последнего заказа.\n\nСтатусы: Новый → В работе → В доставке → Завершён. Изменения статуса приходят сюда автоматически.'+(isAdmin(env,user.id)?'\n\n⚙️ Администратору\n/admin — остатки\n/orders — все последние заказы\n/stats — статистика\n/promos — промокоды\n/promo add CODE percent 10 50 30 1000 — создать: код, тип скидки, размер, активации, дни, минимум заказа\n/promo disable CODE — выключить\n/balance ID СУММА — зачислить баланс пользователю':''),{reply_markup:keyboard});
+    await send(env,m.chat.id,'🛍 Как заказать\nОткройте магазин, выберите размер и товары, затем укажите адрес и промокод при оформлении. Заказ оплачивается с баланса.\n\n💳 В магазине рядом с балансом есть кнопка «Пополнить»: заполните форму, а администратор подтвердит или отклонит запрос.\n💳 /balance — ваш баланс.\n📦 /myorders — ваши последние заказы и статусы.\n📍 /address — адрес последнего заказа.\n\nСтатусы: Новый → В работе → В доставке → Завершён. Изменения статуса приходят сюда автоматически.'+(isAdmin(env,user.id)?'\n\n⚙️ Администратору\n/admin — остатки\n/orders — все последние заказы\n/stats — статистика\n/promos — промокоды\n/promo add CODE percent 10 50 30 1000 — создать: код, тип скидки, размер, активации, дни, минимум заказа\n/promo disable CODE — выключить\n/balance ID СУММА — зачислить баланс пользователю':''),{reply_markup:keyboard});
     return;
   }
   if (/^\/admin(?:@\w+)?$/.test(m.text||'') || m.text==='⚙️ Админ-панель') {
@@ -385,7 +431,7 @@ async function processUpdate(update,env) {
       const target=Number(args[0]), amount=Number(args[1]); if (!Number.isSafeInteger(target) || !Number.isSafeInteger(amount) || amount<1 || amount>100000000) { await send(env,m.chat.id,'Сумма должна быть целым числом от 1 до 100 000 000 ₽.'); return; }
       const balance=await creditBalance(env,target,amount); await send(env,m.chat.id,`💳 Пользователю ${target} зачислено ${amount.toLocaleString('ru-RU')} ₽. Новый баланс: ${balance.toLocaleString('ru-RU')} ₽.`); return;
     }
-    const balance=await balanceFor(env,user.id); await send(env,m.chat.id,`💳 Ваш баланс: <b>${balance.toLocaleString('ru-RU')} ₽</b>\n\nПополнение появится после подключения защищённой оплаты. Сейчас администратор может зачислить средства вручную.`,{parse_mode:'HTML',reply_markup:keyboard}); return;
+    const balance=await balanceFor(env,user.id); await send(env,m.chat.id,`💳 Ваш баланс: <b>${balance.toLocaleString('ru-RU')} ₽</b>\n\nЧтобы пополнить баланс, откройте магазин и нажмите «Пополнить» рядом с балансом. Администратор подтвердит запрос в боте.`,{parse_mode:'HTML',reply_markup:keyboard}); return;
   }
   if (/^\/promos(?:@\w+)?$/.test(m.text||'')) { if (!isAdmin(env,user.id)) { await send(env,m.chat.id,'Эта команда доступна администратору.'); return; } await showPromos(env,m.chat.id); return; }
   if (/^\/promo(?:@\w+)?(?:\s|$)/.test(m.text||'')) {
@@ -449,7 +495,7 @@ export default {
         return new Response('Webhook repaired: message and callback_query enabled.');
       } catch { return new Response('Webhook repair failed.',{status:503}); }
     }
-    if (request.method==='OPTIONS' && (path==='/inventory' || path==='/account' || path==='/promo-preview' || path.startsWith('/admin/'))) return new Response(null,{headers:corsHeaders});
+    if (request.method==='OPTIONS' && (path==='/inventory' || path==='/account' || path==='/promo-preview' || path==='/topup-request' || path.startsWith('/admin/'))) return new Response(null,{headers:corsHeaders});
     if (request.method==='POST' && path.startsWith('/admin/')) {
       if (!env.DB || !env.BOT_TOKEN) return Response.json({message:'Сервис временно недоступен.'},{status:503,headers:corsHeaders});
       let data,user;
@@ -464,6 +510,18 @@ export default {
       if (!env.DB || !env.BOT_TOKEN) return new Response('Not configured',{status:503,headers:corsHeaders});
       try { const raw=await request.text(); if (new TextEncoder().encode(raw).length>10000) throw Error('payload'); const user=await authenticateApp(JSON.parse(raw),env); return Response.json({balance:await balanceFor(env,user.id),is_admin:isAdmin(env,user.id)},{headers:corsHeaders}); }
       catch { return new Response('Forbidden',{status:403,headers:corsHeaders}); }
+    }
+    if (request.method==='POST' && path==='/topup-request') {
+      if (!env.DB || !env.BOT_TOKEN || !/^-?\d+$/.test(env.ADMIN_CHAT_ID||'')) return Response.json({message:'Сервис временно недоступен.'},{status:503,headers:corsHeaders});
+      try {
+        const raw=await request.text(); if (new TextEncoder().encode(raw).length>10000) throw Error('size');
+        const data=JSON.parse(raw), user=await authenticateApp(data,env);
+        const requestInfo=await createTopupRequest(env,user.id,data);
+        return Response.json({message:`Запрос на ${requestInfo.amount.toLocaleString('ru-RU')} ₽ отправлен администратору. Ожидайте решения в боте.`},{headers:corsHeaders});
+      } catch(error) {
+        const message=/^[А-ЯЁ]/.test(error.message||'')?error.message:'Не удалось отправить запрос. Попробуйте снова.';
+        return Response.json({message},{status:400,headers:corsHeaders});
+      }
     }
     if (request.method==='POST' && path==='/promo-preview') {
       if (!env.DB || !env.BOT_TOKEN) return new Response('Not configured',{status:503,headers:corsHeaders});
