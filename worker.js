@@ -175,8 +175,38 @@ async function ensureCommerce(env) {
   await env.DB.batch([
     env.DB.prepare('CREATE TABLE IF NOT EXISTS balances (user_id INTEGER PRIMARY KEY, balance INTEGER NOT NULL DEFAULT 0 CHECK(balance>=0), updated_at INTEGER NOT NULL)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS promo_codes (code TEXT PRIMARY KEY, discount_type TEXT NOT NULL CHECK(discount_type IN (\'percent\',\'fixed\')), discount_value INTEGER NOT NULL CHECK(discount_value>0), max_activations INTEGER NOT NULL CHECK(max_activations>0), used_count INTEGER NOT NULL DEFAULT 0 CHECK(used_count>=0), valid_until INTEGER NOT NULL DEFAULT 0, min_order_total INTEGER NOT NULL DEFAULT 0 CHECK(min_order_total>=0), active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)'),
-    env.DB.prepare('CREATE TABLE IF NOT EXISTS topup_requests (request_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, username TEXT NOT NULL, email TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount>0), state TEXT NOT NULL CHECK(state IN (\'pending\',\'approved\',\'declined\',\'failed\')), created_at INTEGER NOT NULL, decided_at INTEGER NOT NULL DEFAULT 0)')
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS topup_requests (request_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, username TEXT NOT NULL, email TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount>0), state TEXT NOT NULL CHECK(state IN (\'pending\',\'approved\',\'declined\',\'failed\')), created_at INTEGER NOT NULL, decided_at INTEGER NOT NULL DEFAULT 0)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS shop_controls (id INTEGER PRIMARY KEY CHECK(id=1), order_cooldown_minutes INTEGER NOT NULL DEFAULT 60 CHECK(order_cooldown_minutes BETWEEN 0 AND 10080), topup_cooldown_minutes INTEGER NOT NULL DEFAULT 60 CHECK(topup_cooldown_minutes BETWEEN 0 AND 10080), purchases_blocked_until INTEGER NOT NULL DEFAULT 0, admin_unlimited INTEGER NOT NULL DEFAULT 1 CHECK(admin_unlimited IN (0,1)), updated_at INTEGER NOT NULL)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS user_controls (user_id INTEGER PRIMARY KEY, order_cooldown_minutes INTEGER, topup_cooldown_minutes INTEGER, purchases_blocked_until INTEGER NOT NULL DEFAULT 0, bypass_all INTEGER NOT NULL DEFAULT 0 CHECK(bypass_all IN (0,1)), updated_at INTEGER NOT NULL)')
   ]);
+}
+const CONTROL_MAX_MINUTES=10080;
+async function controlsFor(env,userId) {
+  await ensureCommerce(env); const now=Date.now();
+  await env.DB.prepare('INSERT OR IGNORE INTO shop_controls (id,order_cooldown_minutes,topup_cooldown_minutes,purchases_blocked_until,admin_unlimited,updated_at) VALUES (1,60,60,0,1,?)').bind(now).run();
+  const [global,user]=await Promise.all([
+    env.DB.prepare('SELECT order_cooldown_minutes,topup_cooldown_minutes,purchases_blocked_until,admin_unlimited FROM shop_controls WHERE id=1').first(),
+    env.DB.prepare('SELECT user_id,order_cooldown_minutes,topup_cooldown_minutes,purchases_blocked_until,bypass_all FROM user_controls WHERE user_id=?').bind(userId).first()
+  ]);
+  return {global,user};
+}
+function controlExempt(env,userId,controls) { return Boolean(controls.user?.bypass_all) || (isAdmin(env,userId) && Boolean(controls.global?.admin_unlimited)); }
+function waitText(until,action) { const minutes=Math.max(1,Math.ceil((until-Date.now())/60000)); return `${action} будет доступно через ${minutes} мин.`; }
+async function enforceTopupControls(env,userId) {
+  const controls=await controlsFor(env,userId); if (controlExempt(env,userId,controls)) return;
+  const minutes=controls.user?.topup_cooldown_minutes??controls.global.topup_cooldown_minutes;
+  if (!minutes) return;
+  const latest=await env.DB.prepare('SELECT created_at FROM topup_requests WHERE user_id=? ORDER BY created_at DESC LIMIT 1').bind(userId).first();
+  if (latest?.created_at && latest.created_at+minutes*60000>Date.now()) throw Error(waitText(latest.created_at+minutes*60000,'Следующий запрос на пополнение'));
+}
+async function enforceOrderControls(env,userId,orderId) {
+  const controls=await controlsFor(env,userId); if (controlExempt(env,userId,controls)) return;
+  const blockedUntil=Math.max(controls.global.purchases_blocked_until||0,controls.user?.purchases_blocked_until||0);
+  if (blockedUntil>Date.now()) throw Error(waitText(blockedUntil,'Покупки'));
+  const minutes=controls.user?.order_cooldown_minutes??controls.global.order_cooldown_minutes;
+  if (!minutes) return;
+  const latest=await env.DB.prepare('SELECT created_at FROM orders WHERE user_id=? AND order_id<>? ORDER BY created_at DESC LIMIT 1').bind(userId,orderId).first();
+  if (latest?.created_at && latest.created_at+minutes*60000>Date.now()) throw Error(waitText(latest.created_at+minutes*60000,'Следующий заказ'));
 }
 async function balanceFor(env,userId) { await ensureCommerce(env); await env.DB.prepare('INSERT OR IGNORE INTO balances (user_id,balance,updated_at) VALUES (?,?,?)').bind(userId,0,Date.now()).run(); return (await env.DB.prepare('SELECT balance FROM balances WHERE user_id=?').bind(userId).first())?.balance||0; }
 async function creditBalance(env,userId,amount) { await ensureCommerce(env); await env.DB.prepare('INSERT OR IGNORE INTO balances (user_id,balance,updated_at) VALUES (?,?,?)').bind(userId,0,Date.now()).run(); await env.DB.prepare('UPDATE balances SET balance=balance+?,updated_at=? WHERE user_id=?').bind(amount,Date.now(),userId).run(); return balanceFor(env,userId); }
@@ -191,6 +221,7 @@ function normalizeTopup(data) {
 }
 async function createTopupRequest(env,userId,data) {
   await ensureCommerce(env);
+  await enforceTopupControls(env,userId);
   const request=normalizeTopup(data), requestId=crypto.randomUUID(), now=Date.now();
   await env.DB.prepare('INSERT INTO topup_requests (request_id,user_id,username,email,amount,state,created_at,decided_at) VALUES (?,?,?,?,?,\'pending\',?,0)').bind(requestId,userId,request.username,request.email,request.amount,now).run();
   const adminText=`💳 <b>Запрос на пополнение</b>\n\nПользователь: @${request.username}\nTelegram ID: <code>${userId}</code>\nEmail: ${request.email}\nСумма: <b>${request.amount.toLocaleString('ru-RU')} ₽</b>\n\nПосле подтверждения сумма будет зачислена на баланс пользователя.`;
@@ -272,6 +303,26 @@ async function adminApi(path,data,env) {
     const result=await env.DB.prepare('UPDATE inventory SET stock=?,updated_at=? WHERE name=? AND stock=?').bind(data.stock,Date.now(),data.name,data.previous).run();
     if (!result.meta.changes) throw Error('Остаток уже изменился. Обновите панель перед сохранением.');
     return {message:'Остаток сохранён.'};
+  }
+  if (path==='/admin/controls/data') {
+    const global=(await controlsFor(env,Number(env.ADMIN_CHAT_ID))).global;
+    const userId=Number(data.user_id);
+    const user=Number.isSafeInteger(userId)&&userId>0?(await controlsFor(env,userId)).user:null;
+    return {global,user};
+  }
+  if (path==='/admin/controls/global') {
+    const c=data.controls||{}, blockedUntil=Number(c.purchases_blocked_until)||0;
+    if (!Number.isSafeInteger(c.order_cooldown_minutes) || c.order_cooldown_minutes<0 || c.order_cooldown_minutes>CONTROL_MAX_MINUTES || !Number.isSafeInteger(c.topup_cooldown_minutes) || c.topup_cooldown_minutes<0 || c.topup_cooldown_minutes>CONTROL_MAX_MINUTES || !Number.isSafeInteger(blockedUntil) || blockedUntil<0 || (blockedUntil&& (blockedUntil<=Date.now() || blockedUntil>Date.now()+3650*86400000)) || typeof c.admin_unlimited!=='boolean') throw Error('Проверьте интервалы и время блокировки.');
+    await controlsFor(env,Number(env.ADMIN_CHAT_ID));
+    await env.DB.prepare('UPDATE shop_controls SET order_cooldown_minutes=?,topup_cooldown_minutes=?,purchases_blocked_until=?,admin_unlimited=?,updated_at=? WHERE id=1').bind(c.order_cooldown_minutes,c.topup_cooldown_minutes,blockedUntil,c.admin_unlimited?1:0,Date.now()).run();
+    return {message:'Общие ограничения сохранены.'};
+  }
+  if (path==='/admin/controls/user') {
+    const c=data.controls||{}, userId=Number(c.user_id), blockedUntil=Number(c.purchases_blocked_until)||0;
+    const validMinutes=value=>value===null || (Number.isSafeInteger(value)&&value>=0&&value<=CONTROL_MAX_MINUTES);
+    if (!Number.isSafeInteger(userId)||userId<1||!validMinutes(c.order_cooldown_minutes)||!validMinutes(c.topup_cooldown_minutes)||!Number.isSafeInteger(blockedUntil)||blockedUntil<0||(blockedUntil&&(blockedUntil<=Date.now()||blockedUntil>Date.now()+3650*86400000))||typeof c.bypass_all!=='boolean') throw Error('Проверьте Telegram ID, интервалы и время блокировки.');
+    await env.DB.prepare('INSERT INTO user_controls (user_id,order_cooldown_minutes,topup_cooldown_minutes,purchases_blocked_until,bypass_all,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET order_cooldown_minutes=excluded.order_cooldown_minutes,topup_cooldown_minutes=excluded.topup_cooldown_minutes,purchases_blocked_until=excluded.purchases_blocked_until,bypass_all=excluded.bypass_all,updated_at=excluded.updated_at').bind(userId,c.order_cooldown_minutes,c.topup_cooldown_minutes,blockedUntil,c.bypass_all?1:0,Date.now()).run();
+    return {message:'Правила пользователя сохранены.'};
   }
   throw Error('Неизвестное действие.');
 }
@@ -453,6 +504,8 @@ async function processUpdate(update,env) {
   try { d=validateOrder(m.web_app_data.data); }
   catch { await send(env,m.chat.id,'Не удалось принять заказ: проверьте поля и количество товаров.',{reply_markup:keyboard});return; }
   await ensureCommerce(env);
+  try { await enforceOrderControls(env,user.id,d.order_id); }
+  catch (error) { await send(env,m.chat.id,'❌ '+(error.message||'Покупки временно ограничены.'),{reply_markup:keyboard}); return; }
   // Unique ID prevents duplicate delivery for already acknowledged orders.
   await env.DB.prepare('INSERT OR IGNORE INTO orders (user_id,order_id,address,state,created_at,locked_at,notified) VALUES (?,?,?,\'pending\',?,0,0)').bind(user.id,d.order_id,d.address,Date.now()).run();
   const row=await env.DB.prepare('SELECT state,notified FROM orders WHERE user_id=? AND order_id=?').bind(user.id,d.order_id).first();

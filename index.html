@@ -460,7 +460,7 @@
       .admin-panel { background:var(--card-bg); border:1px solid var(--border); border-radius:20px; padding:18px; margin-bottom:16px; }
       .admin-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
       .admin-heading h2 { font-size:21px; }
-      .admin-tabs { display:flex; gap:8px; margin:16px 0; }
+      .admin-tabs { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0; }
       .admin-tabs button { flex:1; padding:10px; }
       .admin-tabs button[aria-selected="true"] { background:var(--primary);color:#fff; }
       .admin-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
@@ -475,6 +475,8 @@
       .admin-stock div { display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px; }
       .admin-stock button { padding:10px; }
       .admin-message { margin:10px 0;line-height:1.5;font-size:13px; }
+      .admin-check { display:flex; align-items:center; gap:9px; padding:10px 0; font-size:13px; font-weight:700; }
+      .admin-check input { width:20px; height:20px; accent-color:var(--primary); }
       .header { column-gap:8px; }
       .header h1 { text-align:center;font-size:clamp(17px,4.7vw,28px); }
       .header-actions { gap:5px; }
@@ -566,7 +568,7 @@
         <section class="admin-panel" id="adminPanel" hidden aria-label="Управление магазином">
             <div class="admin-heading"><h2>Управление магазином</h2><button class="secondary-btn" id="adminClose">Закрыть</button></div>
             <p class="admin-note">Доступ подтверждён через личный чат администратора.</p>
-            <div class="admin-tabs"><button class="secondary-btn" id="adminPromosTab" aria-selected="true">Промокоды</button><button class="secondary-btn" id="adminStockTab" aria-selected="false">Остатки</button></div>
+            <div class="admin-tabs"><button class="secondary-btn" id="adminPromosTab" aria-selected="true">Промокоды</button><button class="secondary-btn" id="adminStockTab" aria-selected="false">Остатки</button><button class="secondary-btn" id="adminControlsTab" aria-selected="false">Ограничения</button></div>
             <p class="admin-message" id="adminMessage" role="status" aria-live="polite"></p>
             <div id="adminPromosView">
                 <form id="promoCreateForm">
@@ -585,6 +587,23 @@
                 <div id="adminPromoList"></div>
             </div>
             <div id="adminStockView" hidden><p class="admin-note">Укажите фактическое количество товара. Ноль — нет в наличии.</p><input id="adminStockSearch" type="search" placeholder="Найти товар" aria-label="Поиск по остаткам"><div id="adminStockList"></div></div>
+            <div id="adminControlsView" hidden>
+                <h3>Правила для всех</h3>
+                <p class="admin-note">0 минут отключает ограничение. При блокировке покупки запрещены до указанного времени.</p>
+                <form id="globalControlsForm"><div class="admin-grid">
+                    <label>Интервал заказов, мин.<input id="globalOrderCooldown" required type="number" min="0" max="10080" step="1" value="60"></label>
+                    <label>Интервал пополнений, мин.<input id="globalTopupCooldown" required type="number" min="0" max="10080" step="1" value="60"></label>
+                    <label class="admin-wide">Покупки закрыты до<input id="globalPurchaseBlock" type="datetime-local"></label>
+                </div><label class="admin-check"><input id="adminUnlimited" type="checkbox" checked>Админ без ограничений</label><button class="admin-primary" id="saveGlobalControls" type="submit">Сохранить правила для всех</button></form>
+                <h3>Правила для пользователя</h3>
+                <p class="admin-note">Укажите Telegram ID. Пустой интервал означает правило для всех. «Без ограничений» отменяет интервалы и блокировку покупок для этого пользователя.</p>
+                <form id="userControlsForm"><div class="admin-grid">
+                    <label class="admin-wide">Telegram ID<input id="controlledUserId" required type="number" min="1" step="1" inputmode="numeric" placeholder="Например, 123456789"></label>
+                    <label>Интервал заказов, мин.<input id="userOrderCooldown" type="number" min="0" max="10080" step="1" placeholder="Как для всех"></label>
+                    <label>Интервал пополнений, мин.<input id="userTopupCooldown" type="number" min="0" max="10080" step="1" placeholder="Как для всех"></label>
+                    <label class="admin-wide">Покупки закрыты до<input id="userPurchaseBlock" type="datetime-local"></label>
+                </div><label class="admin-check"><input id="userBypassAll" type="checkbox">Без ограничений для пользователя</label><button class="admin-primary" id="saveUserControls" type="submit">Сохранить правила пользователя</button></form>
+            </div>
         </section>
         <div class="tabs">
             <button class="tab active" data-tab="catalog">📦 Каталог</button>
@@ -1272,9 +1291,27 @@
         async function adminAction(button,path,body) {
             if(!adminAllowed) return;
             button.disabled=true;
-            try { const data=await appRequest(path,body); await loadAdmin(); adminMessage(data.message); }
+            try { const data=await appRequest(path,body); await Promise.all([loadAdmin(),loadControls()]); adminMessage(data.message); }
             catch(error) { adminMessage(error.message); }
             finally { button.disabled=false; }
+        }
+        const datetimeValue=time=>{if(!time)return '';const date=new Date(time-Date.prototype.getTimezoneOffset.call(new Date(time))*60000);return date.toISOString().slice(0,16);};
+        const controlNumber=id=>{const value=document.getElementById(id).value.trim();return value===''?null:Number(value);};
+        async function loadControls() {
+            if(!adminAllowed)return;
+            const userId=Number(document.getElementById('controlledUserId').value);
+            try {
+                const data=await appRequest('/admin/controls/data',Number.isSafeInteger(userId)&&userId>0?{user_id:userId}:{}), global=data.global||{};
+                document.getElementById('globalOrderCooldown').value=global.order_cooldown_minutes??60;
+                document.getElementById('globalTopupCooldown').value=global.topup_cooldown_minutes??60;
+                document.getElementById('globalPurchaseBlock').value=datetimeValue(global.purchases_blocked_until);
+                document.getElementById('adminUnlimited').checked=Boolean(global.admin_unlimited);
+                const user=data.user;
+                document.getElementById('userOrderCooldown').value=user?.order_cooldown_minutes??'';
+                document.getElementById('userTopupCooldown').value=user?.topup_cooldown_minutes??'';
+                document.getElementById('userPurchaseBlock').value=datetimeValue(user?.purchases_blocked_until);
+                document.getElementById('userBypassAll').checked=Boolean(user?.bypass_all);
+            } catch(error) { adminMessage(error.message); }
         }
         function renderAdminStocks() {
             const list=document.getElementById('adminStockList'); list.replaceChildren();
@@ -1303,22 +1340,32 @@
                 adminInventory=data.inventory;renderAdminStocks();adminMessage('Данные обновлены.');
             } catch(error) { adminMessage(error.message);throw error; }
         }
-        document.getElementById('adminOpen').addEventListener('click',()=>{if(!adminAllowed)return;document.getElementById('adminPanel').hidden=false;loadAdmin().catch(()=>{});document.getElementById('adminPanel').scrollIntoView({behavior:'smooth'});});
+        document.getElementById('adminOpen').addEventListener('click',()=>{if(!adminAllowed)return;document.getElementById('adminPanel').hidden=false;Promise.all([loadAdmin(),loadControls()]).catch(()=>{});document.getElementById('adminPanel').scrollIntoView({behavior:'smooth'});});
         document.getElementById('adminClose').addEventListener('click',()=>{document.getElementById('adminPanel').hidden=true;loadGlobalInventory();});
         document.getElementById('adminRefresh').addEventListener('click',()=>loadAdmin().catch(()=>{}));
         document.getElementById('adminStockSearch').addEventListener('input',renderAdminStocks);
-        function adminTab(stocks) {
-            document.getElementById('adminStockView').hidden=!stocks;document.getElementById('adminPromosView').hidden=stocks;
-            document.getElementById('adminStockTab').setAttribute('aria-selected',String(stocks));document.getElementById('adminPromosTab').setAttribute('aria-selected',String(!stocks));
+        function adminTab(view) {
+            document.getElementById('adminStockView').hidden=view!=='stock';document.getElementById('adminPromosView').hidden=view!=='promos';document.getElementById('adminControlsView').hidden=view!=='controls';
+            document.getElementById('adminStockTab').setAttribute('aria-selected',String(view==='stock'));document.getElementById('adminPromosTab').setAttribute('aria-selected',String(view==='promos'));document.getElementById('adminControlsTab').setAttribute('aria-selected',String(view==='controls'));
         }
-        document.getElementById('adminStockTab').addEventListener('click',()=>adminTab(true));
-        document.getElementById('adminPromosTab').addEventListener('click',()=>adminTab(false));
+        document.getElementById('adminStockTab').addEventListener('click',()=>adminTab('stock'));
+        document.getElementById('adminPromosTab').addEventListener('click',()=>adminTab('promos'));
+        document.getElementById('adminControlsTab').addEventListener('click',()=>{adminTab('controls');loadControls();});
         document.getElementById('adminDiscountType').addEventListener('change',()=>{document.getElementById('adminDiscountValue').max=document.getElementById('adminDiscountType').value==='percent'?'100':'100000000';});
         document.getElementById('promoCreateForm').addEventListener('submit',async event=>{
             event.preventDefault(); if(!adminAllowed)return;
             const read=id=>document.getElementById(id).value;
             const promo={code:read('adminCode').trim().toUpperCase(),type:read('adminDiscountType'),value:Number(read('adminDiscountValue')),uses:Number(read('adminUses')),minimum:Number(read('adminMinimum')),expires:read('adminExpires')?new Date(read('adminExpires')).getTime():0};
             await adminAction(document.getElementById('adminCreate'),'/admin/promos/create',{promo});
+        });
+        document.getElementById('globalControlsForm').addEventListener('submit',async event=>{
+            event.preventDefault();const controls={order_cooldown_minutes:controlNumber('globalOrderCooldown'),topup_cooldown_minutes:controlNumber('globalTopupCooldown'),purchases_blocked_until:document.getElementById('globalPurchaseBlock').value?new Date(document.getElementById('globalPurchaseBlock').value).getTime():0,admin_unlimited:document.getElementById('adminUnlimited').checked};
+            await adminAction(document.getElementById('saveGlobalControls'),'/admin/controls/global',{controls});
+        });
+        document.getElementById('controlledUserId').addEventListener('change',()=>loadControls());
+        document.getElementById('userControlsForm').addEventListener('submit',async event=>{
+            event.preventDefault();const controls={user_id:Number(document.getElementById('controlledUserId').value),order_cooldown_minutes:controlNumber('userOrderCooldown'),topup_cooldown_minutes:controlNumber('userTopupCooldown'),purchases_blocked_until:document.getElementById('userPurchaseBlock').value?new Date(document.getElementById('userPurchaseBlock').value).getTime():0,bypass_all:document.getElementById('userBypassAll').checked};
+            await adminAction(document.getElementById('saveUserControls'),'/admin/controls/user',{controls});
         });
         loadBalance();
 
